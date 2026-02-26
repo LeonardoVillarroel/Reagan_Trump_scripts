@@ -1,0 +1,1451 @@
+---
+title: "R Notebook"
+output:
+  pdf_document: default
+  html_notebook: default
+---
+
+
+
+# Lexical Diversity
+
+To compare the rhetorical strategies of Ronald Reagan and Donald Trump, we applied a set of quantitative linguistic measures capturing both lexical diversity and textual readability. Lexical diversity was assessed using three complementary metrics: the Type-Token Ratio (TTR), the Moving-Average Type-Token Ratio (MATTR),  which adjust for differences in text length and the Lexical-TTR (LTR) which consider inflectional variance.Together, these metrics allow us to examine  how varied the presidents’ vocabularies were.
+
+## Import the libraries
+
+To Perfom the Natural Language processing we need to  import the necessary libraries
+```{r setup, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+#install.packages(c("xml2", "tidyverse", "quanteda"))
+#tinytex::install_tinytex()
+library(xml2)
+library(rmarkdown)
+library(textstem)
+library(spacyr)
+library(stringr)
+library(readr)
+library(quanteda)
+library(readtext)
+library(quanteda.textstats)
+library(tokenizers)
+library(tidytext)
+library(tibble)
+library(dplyr)
+library(ggplot2)
+
+```
+
+We set the working directory to the folder containing our XML files: cleaned_reagan_speeches.xml and cleaned_trump_speeches.xml
+```{r}
+setwd("C:/Users/leo_m/Desktop/Corpus_Analysis/Final_Project/Reagan_Trump")
+```
+
+## XML to Data Frame
+
+We transformed the XML files into a data frame, converting the XML nodes into table columns using the xml2 library.
+```{r}
+parse_speeches <- function(file_path, speaker) {
+  # Read XML file
+  xml_data <- read_xml(file_path)
+  
+  # Extract all speech nodes
+  speeches <- xml_find_all(xml_data, "//speech")
+  
+  # Extract each node as a vector
+  titles <- xml_text(xml_find_all(speeches, "title"))
+  dates <- xml_text(xml_find_all(speeches, "date"))
+  links <- xml_text(xml_find_all(speeches, "link"))
+  texts <- xml_text(xml_find_all(speeches, "text"))
+  
+  # Create a data frame
+  df <- tibble(
+    speaker = speaker,
+    title = titles,
+    date = dates,
+    link = links,
+    text = texts
+  )
+  
+  return(df)
+}
+```
+
+### Create a Data Frame of the speeches
+We create a data frame for each president and the we combine both in one data frame speeches_df
+```{r}
+# Parse Reagan speeches
+reagan_df <- parse_speeches("cleaned_reagan_speeches.xml", "Reagan")
+
+# Parse Trump speeches
+trump_df <- parse_speeches("cleaned_trump_speeches.xml", "Trump")
+
+# Combine into one data frame
+speeches_df <- bind_rows(reagan_df, trump_df)
+
+#Preview of the data frame
+head(speeches_df)
+dim(speeches_df)
+
+# Count the number of speeches for each speaker
+speech_counts <- speeches_df %>%
+  group_by(speaker) %>%
+  summarise(count = n())
+print(speech_counts)
+```
+
+### Balancing same number of speeches for each President
+
+After scraping, there were more Donald Trump speeches available in the American Presidency Project. To ensure a balanced dataset for comparison, we randomly selected 139 speeches for Donald Trump using sample_n(), matching the number of speeches available for Ronald Reagan. We also check for any duplicates 
+```{r}
+# Set a seed for reproducibility
+set.seed(123)  # Ensures consistent random sampling
+
+# Filter Reagan speeches (keep all) and sample 139 Trump speeches
+balanced_speeches_df <- speeches_df %>%
+  filter(speaker == "Reagan") %>%
+  bind_rows(
+    speeches_df %>%
+      filter(speaker == "Trump") %>%
+      sample_n(size = 139)
+  )
+# Check the number of speeches per speaker
+balanced_counts <- balanced_speeches_df %>%
+  group_by(speaker) %>%
+  summarise(count = n())
+print(balanced_counts)
+
+# Inspect the data frame (Show 5 random rows)
+
+print(balanced_speeches_df[sample(nrow(balanced_speeches_df), 5), ])
+
+
+# Check for duplicate titles
+duplicate_titles <- balanced_speeches_df %>%
+  group_by(title) %>%
+  summarise(count = n()) %>%
+  filter(count > 1)
+print(duplicate_titles)
+```
+
+Even when the titles appear similar, the dates differ, indicating that the events were the same but the speeches were delivered in different contexts.
+
+
+### Saving XML file for selected 139 speeches of Donald Trump
+```{r}
+# Create root node
+root <- xml_new_root("speeches")
+
+# Loop over speeches
+for (i in seq_len(nrow(balanced_speeches_df))) {
+
+  speech_node <- xml_add_child(root, "speech")
+
+  xml_add_child(speech_node, "speaker",
+                balanced_speeches_df$speaker[i])
+
+  xml_add_child(speech_node, "title",
+                balanced_speeches_df$title[i])
+
+  xml_add_child(speech_node, "date",
+                balanced_speeches_df$date[i])
+
+  xml_add_child(speech_node, "text",
+                balanced_speeches_df$text[i])
+  
+  
+
+}
+write_xml(root, "trump_139_selected_speeches.xml")  
+
+```
+
+
+## Creating a Quanteda Corpus
+
+We first added a unique ID to each speech using mutate() and sprintf("%03d", row_number()), creating IDs like 001, 002, etc. Then, we built a quanteda corpus with corpus(), specifying the text column (text_field = "text") and the document ID (docid_field = "unique_id"). This allows efficient text analysis. Finally, we checked the corpus structure with print(), summary(), and head(docnames()) to confirm the documents were correctly labeled.
+
+```{r}
+
+balanced_speeches_df <- balanced_speeches_df %>%
+  mutate(unique_id = sprintf("%03d", row_number()))
+# Create a quanteda corpus
+speeches_corpus <- corpus(balanced_speeches_df, 
+                          text_field = "text",
+                          docid_field = "unique_id")
+#Check the corpus structure
+print(speeches_corpus)
+speeches_corpus_df <- summary(speeches_corpus)
+head(docnames(speeches_corpus))
+```
+
+
+### Tokenization( Token-lenght based Method)
+
+Then We generated a summary of the corpus using summary(speeches_corpus, n = 5), which shows the first five documents. Then, we tokenized the corpus with quanteda::tokens(), by default it splits the text into individual words for analysis.
+
+We extracted the document names with docnames() and the speakers from the document variables using docvars(), storing them in speakers_vec and naming them according to their document IDs. This links each speech to its speaker.
+
+
+
+```{r}
+# Summary of the corpus
+summary(speeches_corpus, n = 5)  # Shows first 5 documents
+
+speeches_tokens <- quanteda:: tokens(speeches_corpus)
+
+docnames_vec <- docnames(speeches_tokens)
+speakers_vec <- docvars(speeches_tokens, "speaker")
+names(speakers_vec) <- docnames_vec
+
+
+
+```
+
+### Overall Token counts
+
+
+```{r}
+
+
+
+# Tokenize the corpus (word tokens)
+speeches_tokens <- quanteda::tokens(
+  speeches_corpus,
+  remove_punct = TRUE
+) %>%
+  tokens_tolower()
+
+total_tokens <- sum(ntoken(speeches_tokens))
+print(total_tokens)
+
+# Sentence tokenization 
+speeches_sentences <- quanteda::tokens(
+  speeches_corpus,
+  what = "sentence"
+)
+
+total_sentences <- sum(ntoken(speeches_sentences))
+print(total_sentences)
+
+# Tokens and Sentences per document
+token_counts <- ntoken(speeches_tokens)
+sentence_counts <- ntoken(speeches_sentences)
+
+# Document-level metadata
+doc_info <- docvars(speeches_corpus)
+
+# Combine counts with metadata
+count_data <- data.frame(
+  speaker   = doc_info$speaker,
+  tokens    = token_counts,
+  sentences = sentence_counts
+)
+
+# Aggregate totals by speaker
+aggregate_stats <- count_data %>%
+  group_by(speaker) %>%
+  summarise(
+    total_tokens     = sum(tokens),
+    avg_tokens       = mean(tokens),
+    sd_tokens        = sd(tokens),
+    total_sentences  = sum(sentences),
+    avg_sentences    = mean(sentences),
+    sd_sentences     = sd(sentences),
+    n_speeches       = n()
+  )
+
+print(aggregate_stats)
+
+
+
+```
+
+
+## Chunking Strategy. Creatin a Corpus of Chunks.
+
+As we can see above, the speeches vary considerably in length. To ensure greater uniformity and comparability in the linguistic analysis, it was necessary to split the texts into smaller units. For this purpose, we used the quanteda package and its chunk_text function to divide the speeches into segments of 512 words each, and lowercase the words.
+```{r}
+library(quanteda)
+library(dplyr)
+library(stringr)
+
+set.seed(123)
+
+# =====================================================
+# 1. Chunk speeches into ~512-word segments
+# =====================================================
+
+speeches_chunked <- chunk_text(
+  speeches_corpus,
+  chunk_size   = 512,
+  strip_punct  = FALSE,
+  lowercase    = TRUE
+)
+
+speeches_chunked <- unlist(speeches_chunked)
+
+chunked_df <- data.frame(
+  unique_id = names(speeches_chunked),
+  text      = speeches_chunked,
+  stringsAsFactors = FALSE
+)
+
+chunked_df <- chunked_df %>%
+  mutate(original_doc = str_remove(unique_id, "-\\d+$"))
+
+# =====================================================
+# 2. Attach metadata from original corpus
+# =====================================================
+
+original_meta <- data.frame(
+  original_doc = docnames(speeches_corpus),
+  speaker      = docvars(speeches_corpus, "speaker"),
+  title         = docvars(speeches_corpus, "title"),
+  date         = docvars(speeches_corpus, "date"),
+  link         = docvars(speeches_corpus, "link"),
+  stringsAsFactors = FALSE
+)
+
+chunked_df <- chunked_df %>%
+  left_join(original_meta, by = "original_doc")
+
+# =====================================================
+# 3. Create chunked corpus
+# =====================================================
+
+corpus_chunked <- corpus(
+  chunked_df,
+  text_field  = "text",
+  docid_field = "unique_id"
+)
+
+# =====================================================
+# 4. Tokenize ONCE and compute token counts
+# =====================================================
+
+toks_all <- tokens(
+  corpus_chunked,
+  remove_punct   = TRUE,
+  remove_numbers = TRUE,
+  remove_symbols = TRUE
+)
+
+chunked_df$ntokens <- ntoken(toks_all)
+
+# =====================================================
+# 5. Drop empty and short chunks (CRITICAL STEP)
+# =====================================================
+
+MIN_TOKENS <- 400
+
+chunked_df_clean <- chunked_df %>%
+  filter(ntokens >= MIN_TOKENS)
+
+
+
+chunks_per_speaker <- chunked_df_clean %>%
+  count(speaker, name = "n_chunks")
+
+print(chunks_per_speaker)
+
+```
+
+
+### Balancing chunks per Speaker
+As we see Trump'speeches are longer they produce more chunks it is necessary to balance the same number of chunks for each speaker
+
+
+```{r}
+
+set.seed(123)
+# =====================================================
+# 6. Balance speakers AFTER cleaning
+# =====================================================
+
+n_min <- chunked_df_clean %>%
+  count(speaker) %>%
+  summarise(min(n)) %>%
+  pull()
+
+balanced_df <- chunked_df_clean %>%
+  group_by(speaker) %>%
+  slice_sample(n = n_min) %>%
+  ungroup()
+
+# =====================================================
+# 7. Create final balanced corpus
+# =====================================================
+
+corpus_balanced <- corpus(
+  balanced_df,
+  text_field  = "text",
+  docid_field = "unique_id"
+)
+
+# =====================================================
+# 8. Final verification (should be PERFECT)
+# =====================================================
+
+toks_balanced <- tokens(
+  corpus_balanced,
+  remove_punct   = TRUE,
+  remove_numbers = TRUE,
+  remove_symbols = TRUE
+)
+
+cat("\nDocuments per speaker:\n")
+print(docvars(corpus_balanced) %>% count(speaker))
+
+cat("\nToken count summary:\n")
+print(summary(ntoken(toks_balanced)))
+
+cat("\nEmpty documents:\n")
+print(sum(ntoken(toks_balanced) == 0))
+
+```
+
+
+
+### Creating a balanced Corpus of 767 chunks for each speaker
+When we created the chunked corpus every chunk also received an identifier in the format 001-01, where the first three digits correspond to the speech ID and the second part indicates the chunk number.
+
+```{r}
+
+
+set.seed(123)
+
+# =====================================================
+# 1. Chunk speeches into ~512-word segments
+# =====================================================
+speeches_chunked <- chunk_text(
+  speeches_corpus,
+  chunk_size   = 512,
+  strip_punct = FALSE,
+  lowercase   = TRUE
+)
+
+speeches_chunked <- unlist(speeches_chunked)
+
+chunked_df <- data.frame(
+  unique_id = names(speeches_chunked),
+  text      = speeches_chunked,
+  stringsAsFactors = FALSE
+)
+
+chunked_df <- chunked_df %>%
+  mutate(original_doc = str_remove(unique_id, "-\\d+$"))
+
+# =====================================================
+# 2. Attach metadata from original corpus
+# =====================================================
+original_meta <- data.frame(
+  original_doc = docnames(speeches_corpus),
+  speaker      = docvars(speeches_corpus, "speaker"),
+  title        = docvars(speeches_corpus, "title"),
+  date         = docvars(speeches_corpus, "date"),
+  link         = docvars(speeches_corpus, "link"),
+  stringsAsFactors = FALSE
+)
+
+chunked_df <- chunked_df %>%
+  left_join(original_meta, by = "original_doc")
+
+# =====================================================
+# 3. Create chunked corpus
+# =====================================================
+corpus_chunked <- corpus(
+  chunked_df,
+  text_field  = "text",
+  docid_field = "unique_id"
+)
+
+# =====================================================
+# 4. Tokenize ONCE and compute token counts
+# =====================================================
+toks_all <- tokens(
+  corpus_chunked,
+  remove_punct   = TRUE,
+  remove_numbers = TRUE,
+  remove_symbols = TRUE
+)
+
+chunked_df$ntokens <- ntoken(toks_all)
+
+# =====================================================
+# 5. Drop empty and short chunks (CRITICAL STEP)
+# =====================================================
+MIN_TOKENS <- 400
+
+chunked_df_clean <- chunked_df %>%
+  filter(ntokens >= MIN_TOKENS)
+
+chunks_per_speaker <- chunked_df_clean %>%
+  count(speaker, name = "n_chunks")
+
+print(chunks_per_speaker)
+
+set.seed(123)
+
+# =====================================================
+# 6. Balance speakers AFTER cleaning
+# =====================================================
+n_min <- chunked_df_clean %>%
+  count(speaker) %>%
+  summarise(min_n = min(n)) %>%
+  pull(min_n)
+
+balanced_df <- chunked_df_clean %>%
+  group_by(speaker) %>%
+  slice_sample(n = n_min) %>%
+  ungroup()
+
+# =====================================================
+# 7. Create final balanced corpus
+# =====================================================
+corpus_balanced <- corpus(
+  balanced_df,
+  text_field  = "text",
+  docid_field = "unique_id"
+)
+
+# =====================================================
+# 8. Removing punctuation, Number, Symbols, Lowercasing
+# =====================================================
+toks_balanced <- tokens(
+  corpus_balanced,
+  remove_punct   = TRUE,
+  remove_numbers = TRUE,
+  remove_symbols = TRUE
+)
+
+toks_balanced <- tokens_tolower(toks_balanced)
+
+cat("\nDocuments per speaker:\n")
+print(docvars(corpus_balanced) %>% count(speaker))
+
+cat("\nToken count summary:\n")
+print(summary(ntoken(toks_balanced)))
+
+
+
+
+```
+
+
+### Measuring Word lenghts
+```{r}
+word_lengths <- lapply(toks_balanced, nchar)
+word_length_df <- data.frame(
+  speaker = rep(docvars(corpus_balanced, "speaker"),
+                lengths(word_lengths)),
+  word_length = unlist(word_lengths),
+  stringsAsFactors = FALSE
+)
+avg_word_length <- word_length_df %>%
+  group_by(speaker) %>%
+  summarise(
+    avg_word_length = mean(word_length),
+    sd_word_length  = sd(word_length),
+    n_words         = n()
+  )
+print(avg_word_length)
+```
+
+
+## Diversity Metrics with Stopwords
+
+### Calculating TTR
+
+
+
+```{r}
+lex_div_df <- data.frame(
+  doc_id   = docnames(toks_balanced),
+  speaker  = docvars(corpus_balanced, "speaker"),
+  tokens   = ntoken(toks_balanced),
+  types    = ntype(toks_balanced)
+)
+
+lex_div_df <- lex_div_df %>%
+  mutate(
+    TTR = types / tokens
+  )
+
+
+```
+
+### Calculating MATTR
+```{r}
+lex_div_df$MATTR <- textstat_lexdiv(
+  toks_balanced,
+  measure = "MATTR",
+  MATTR_window = 100
+)$MATTR
+
+```
+
+
+### Summary of TTR and MATTR
+```{r}
+lex_div_summary <- lex_div_df %>%
+  group_by(speaker) %>%
+  summarise(
+    n_docs    = n(),
+    avg_TTR   = mean(TTR),
+    sd_TTR    = sd(TTR),
+    min_TTR   = min(TTR),
+    max_TTR   = max(TTR),
+    avg_MATTR = mean(MATTR),
+    sd_MATTR  = sd(MATTR),
+    min_MATTR = min(MATTR),
+    max_MATTR = max(MATTR)
+  )
+
+print(lex_div_summary)
+
+```
+
+
+
+## Diversity Metrics no Stopwords
+
+Removing stopwords is important when measuring lexical diversity because high-frequency function words (such as the, and, of, to) occur in almost every sentence regardless of speaker, topic, or rhetorical strategy. If they are retained, they artificially inflate token counts while contributing very little to lexical variation. This can distort measures like TTR and MATTR by lowering apparent diversity and masking meaningful stylistic differences.
+```{r}
+# =====================================================
+# Lexical Diversity (TTR & MATTR) WITHOUT stopwords
+# Minimal-change solution (Solution 2)
+# =====================================================
+
+library(quanteda)
+library(dplyr)
+
+set.seed(123)
+
+# -----------------------------------------------------
+# 1. Tokenize balanced corpus
+# -----------------------------------------------------
+toks_balanced_nostop <- tokens(
+  corpus_balanced,
+  remove_punct   = TRUE,
+  remove_numbers = TRUE,
+  remove_symbols = TRUE
+)
+
+toks_balanced_nostop <- tokens_tolower(toks_balanced_nostop)
+
+# -----------------------------------------------------
+# 2. Remove stopwords
+# -----------------------------------------------------
+toks_balanced_nostop <- tokens_remove(
+  toks_balanced_nostop,
+  pattern = stopwords("en")
+)
+
+# -----------------------------------------------------
+# 3. Drop empty documents
+# -----------------------------------------------------
+toks_balanced_nostop <- toks_balanced_nostop[
+  ntoken(toks_balanced_nostop) > 0
+]
+
+# -----------------------------------------------------
+# 4. Subset speaker metadata to match filtered tokens
+# -----------------------------------------------------
+speaker_vec <- docvars(corpus_balanced, "speaker")
+names(speaker_vec) <- docnames(corpus_balanced)
+speaker_vec <- speaker_vec[docnames(toks_balanced_nostop)]
+
+# -----------------------------------------------------
+# 5. Compute TTR
+# -----------------------------------------------------
+lex_div_df_nostop <- data.frame(
+  doc_id  = docnames(toks_balanced_nostop),
+  speaker = speaker_vec,
+  tokens  = ntoken(toks_balanced_nostop),
+  types   = ntype(toks_balanced_nostop),
+  stringsAsFactors = FALSE
+)
+
+lex_div_df_nostop <- lex_div_df_nostop %>%
+  mutate(TTR = types / tokens)
+
+# -----------------------------------------------------
+# 6. Compute MATTR
+# -----------------------------------------------------
+lex_div_df_nostop$MATTR <- textstat_lexdiv(
+  toks_balanced_nostop,
+  measure = "MATTR",
+  MATTR_window = 100
+)$MATTR
+
+# -----------------------------------------------------
+# 7. Speaker-level summary
+# -----------------------------------------------------
+lex_div_summary_nostop <- lex_div_df_nostop %>%
+  group_by(speaker) %>%
+  summarise(
+    n_docs    = n(),
+    avg_TTR   = mean(TTR),
+    sd_TTR    = sd(TTR),
+    min_TTR   = min(TTR),
+    max_TTR   = max(TTR),
+    avg_MATTR = mean(MATTR),
+    sd_MATTR  = sd(MATTR),
+    min_MATTR = min(MATTR),
+    max_MATTR = max(MATTR)
+  )
+
+print(lex_div_summary_nostop)
+
+# -----------------------------------------------------
+# 8. Sanity checks
+# -----------------------------------------------------
+cat("\nMissing speakers:\n")
+print(sum(is.na(lex_div_df_nostop$speaker)))
+
+cat("\nDocuments per speaker:\n")
+print(table(lex_div_df_nostop$speaker))
+
+cat("\nToken count summary:\n")
+print(summary(lex_div_df_nostop$tokens))
+
+
+```
+### Plotting TTR and MATTR
+
+By removing stopwords, the analysis focuses on content words—the vocabulary that carries thematic, rhetorical, and strategic meaning. This produces a more accurate estimate of how varied a speaker’s language actually is and allows comparisons to reflect substantive lexical choices rather than grammatical necessities.
+```{r}
+
+
+# -----------------------------------------------------
+# 1. Reshape data to long format
+# -----------------------------------------------------
+lex_div_long <- lex_div_df_nostop %>%
+  select(speaker, TTR, MATTR) %>%
+  pivot_longer(
+    cols = c(TTR, MATTR),
+    names_to = "measure",
+    values_to = "value"
+  )
+
+# -----------------------------------------------------
+# 2. Boxplot for TTR and MATTR side by side
+# -----------------------------------------------------
+ggplot(lex_div_long, aes(x = speaker, y = value, fill = speaker)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  facet_wrap(~ measure, nrow = 1, scales = "free_y") +
+  labs(
+    title = "Lexical Diversity TTR MATTR by Speaker",
+    x = "Speaker",
+    y = "Value"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),
+    legend.position = "none",
+    axis.text.x = element_text(angle = 45, hjust = 1)
+  )
+
+
+```
+
+
+
+####  t.test calculation
+```{r}
+# T-test for TTR
+ttr_test <- t.test(TTR ~ speaker, data = lex_div_df_nostop)
+print(ttr_test)
+
+# T-test for MATTR
+mattr_test <- t.test(MATTR ~ speaker, data = lex_div_df_nostop)
+print(mattr_test)
+```
+
+
+
+#  Lemmatize and pos_tag Corpus
+
+We can now move to a more advanced stage of preprocessing by using spacyr, which allows us to perform lemmatization, POS tagging, and other linguistic annotations. First, we verify the structure of our sampled corpus to confirm the number of documents, speakers, and dates. Then, the text is extracted and prepared for parsing. If as.character() fails, a fallback with tokenization ensures that the corpus can still be processed.
+
+Next, we initialize spaCy with the English model (en_core_web_sm) and run spacy_parse(), which lemmatizes each word, assigns part-of-speech tags, syntactic dependencies, and named entities. After parsing, we enrich the tagged corpus by merging back metadata such as speaker and date from the original docvars. Dates are also converted into a proper Date format for consistency.
+
+Finally, we inspect the tagged data to confirm that tokens, lemmas, and metadata were correctly aligned, and once the process is completed, the spacyr session is finalized with spacy_finalize().
+
+```{r}
+
+library(spacyr)
+library(dplyr)
+
+corpus_texts <- as.character(corpus_balanced)
+names(corpus_texts) <- docnames(corpus_balanced)
+
+# Fallback (rare, but safe)
+if (length(corpus_texts) == 0) {
+  corpus_tokens <- tokens(corpus_balanced)
+  corpus_texts <- sapply(corpus_tokens, paste, collapse = " ")
+  names(corpus_texts) <- names(corpus_tokens)
+}
+
+
+# Uncomment only if needed
+# spacy_install()
+# spacy_download_langmodel("en_core_web_sm")
+
+spacy_initialize(model = "en_core_web_sm")
+
+chunk_tagged <- spacy_parse(
+  corpus_texts,
+  lemma      = TRUE,
+  pos        = TRUE,
+  tag        = TRUE,
+  entity     = TRUE,
+  dependency = TRUE
+)
+
+docvars_df <- data.frame(
+  doc_id  = docnames(corpus_balanced),
+  speaker = docvars(corpus_balanced, "speaker"),
+  date    = docvars(corpus_balanced, "date"),
+  stringsAsFactors = FALSE
+)
+
+chunk_tagged <- chunk_tagged %>%
+  left_join(docvars_df, by = "doc_id")
+
+
+chunk_tagged %>% 
+  sample_n(10) %>% 
+  print()
+
+
+
+
+```
+
+
+
+### Prepare Lemma corpus
+
+Here we start by checking the structure of the annotated corpus, confirming its columns, speakers, and POS tags. Then we define a small list of unwanted tags (PUNCT, NUM, SYM) and filter them out, leaving only meaningful linguistic elements. Finally, we split the cleaned data into two corpora, one for Reagan and one for Trump, to make speaker-specific comparisons.
+
+Unlike the earlier readability step, here we keep stopwords, since they are important for lemmatization and POS tagging. Stopwords preserve the syntax of the sentence and allow us to analyze differences in style and structure more accurately.
+```{r}
+
+
+remove_pos <- c("PUNCT", "NUM", "SYM")
+
+chunk_clean <- chunk_tagged %>%
+  filter(!pos %in% remove_pos)
+
+reagan_clean <- chunk_clean %>%
+  filter(speaker == "Reagan")
+
+trump_clean <- chunk_clean %>%
+  filter(speaker == "Trump")
+
+lemma_types_per_speaker <- chunk_clean %>%
+  group_by(speaker) %>%
+  summarise(
+    unique_lemmas = n_distinct(lemma)
+  )
+
+lemma_types_per_speaker
+
+```
+###  Calculating distributions of POS per Speaker
+```{r}
+lemma_tokens_per_speaker <- chunk_clean %>%
+  group_by(speaker) %>%
+  summarise(
+    total_lemmas = n(),
+    unique_lemmas = n_distinct(lemma)
+  )
+
+lemma_tokens_per_speaker
+
+library(dplyr)
+library(tidyr)
+
+# 1. Define POS categories to keep
+pos_keep <- c("NOUN", "PROPN", "VERB", "ADJ", "ADV")
+
+# 2. Filter cleaned, lemmatized data
+lemma_pos_summary <- chunk_clean %>%
+  filter(pos %in% pos_keep) %>%
+  group_by(speaker, pos) %>%
+  summarise(
+    unique_lemmas = n_distinct(lemma),  # vocabulary size
+    total_lemmas  = n(),                # usage frequency
+    .groups = "drop"
+  ) %>%
+  arrange(speaker, pos)
+
+# 3. View the result
+print(lemma_pos_summary)
+
+```
+### Plotting Distributions
+```{r}
+library(ggplot2)
+
+ggplot(lemma_pos_summary,
+       aes(x = pos, y = unique_lemmas, fill = speaker)) +
+  geom_col(position = "dodge") +
+  labs(
+    title = "Unique Lemmas by Part of Speech and Speaker",
+    x = "Part of Speech",
+    y = "Number of Unique Lemmas",
+    fill = "Speaker"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),
+    plot.title = element_text(face = "bold")
+  )
+
+```
+
+## Lemma-token ratio
+
+ We move into measuring lexical variation with the lemma-token ratio (LTR). First, we define a simple function that divides the number of unique lemmas by the total number of tokens. This allows us to estimate how diverse the vocabulary is once words are reduced to their base forms.
+
+We start by checking the structure of the cleaned corpus and then calculate the overall LTR for Reagan and Trump. After that, we extend the calculation to individual chunks of text by grouping by doc_id, which makes it possible to see variation within each speech. Finally, we summarize these chunk-level results, reporting mean, minimum, and maximum LTR values.
+
+
+
+```{r}
+library(dplyr)
+lemma_ltr <- function(x) {
+  length(unique(x$lemma)) / nrow(x)
+}
+
+# Reagan: LTR per chunk
+reagan_ltr_chunks_df <- reagan_clean %>%
+  group_by(doc_id) %>%
+  summarise(Lemma_TTR = lemma_ltr(cur_data())) %>%
+  ungroup() %>%
+  mutate(speaker = "Reagan")
+
+# Trump: LTR per chunk
+trump_ltr_chunks_df <- trump_clean %>%
+  group_by(doc_id) %>%
+  summarise(Lemma_TTR = lemma_ltr(cur_data())) %>%
+  ungroup() %>%
+  mutate(speaker = "Trump")
+
+# Combine into one table
+ltr_chunks_df <- bind_rows(reagan_ltr_chunks_df, trump_ltr_chunks_df)
+
+# Inspect
+head(ltr_chunks_df)
+
+```
+
+
+### Plotting LTR
+```{r}
+library(ggplot2)
+
+ggplot(ltr_chunks_df, aes(x = speaker, y = Lemma_TTR, fill = speaker)) +
+  geom_boxplot(alpha = 0.7, outlier.shape = NA) +
+  labs(
+    title = "Distribution of Lemma Token Ratio (LTR) by Speaker",
+    x = "Speaker",
+    y = "Lemma Type–Token Ratio (LTR)"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),
+    legend.position = "none"
+  )
+```
+
+### Summary Statistics LTR by Speaker
+
+```{r}
+library(dplyr)
+
+# ===============================
+# Summary statistics by speaker
+# ===============================
+ltr_stats <- ltr_chunks_df %>%
+  group_by(speaker) %>%
+  summarise(
+    min_LTR  = min(Lemma_TTR, na.rm = TRUE),
+    max_LTR  = max(Lemma_TTR, na.rm = TRUE),
+    mean_LTR = mean(Lemma_TTR, na.rm = TRUE),
+    sd_LTR   = sd(Lemma_TTR, na.rm = TRUE),
+    n_chunks = n(),
+    .groups = "drop"
+  )
+
+# Inspect
+ltr_stats
+
+```
+
+
+## Calculation t.test LTR
+
+```{r}
+table(ltr_chunks_df$speaker)
+
+summary(ltr_chunks_df$Lemma_TTR)
+t.test(Lemma_TTR ~ speaker, data = ltr_chunks_df)
+
+```
+
+
+```{r}
+
+library(dplyr)
+
+# ---------------------------------------------
+# 1. Prepare LTR data (lemma-based) per chunk
+# ---------------------------------------------
+lemma_ltr <- function(x) {
+  length(unique(x$lemma)) / nrow(x)
+}
+
+# Reagan
+reagan_ltr_chunks <- reagan_clean %>%
+  group_by(doc_id) %>%
+  summarise(LTR = lemma_ltr(cur_data())) %>%
+  mutate(speaker = "Reagan")
+
+# Trump
+trump_ltr_chunks <- trump_clean %>%
+  group_by(doc_id) %>%
+  summarise(LTR = lemma_ltr(cur_data())) %>%
+  mutate(speaker = "Trump")
+
+# Combine speakers
+ltr_chunks <- bind_rows(reagan_ltr_chunks, trump_ltr_chunks)
+
+# ---------------------------------------------
+# 2. Merge with TTR and MATTR (non-stopwords)
+# lex_div_df_nostop must have: doc_id, speaker, TTR, MATTR
+# ---------------------------------------------
+all_metrics <- lex_div_df_nostop %>%
+  select(doc_id, speaker, TTR, MATTR) %>%
+  inner_join(ltr_chunks, by = c("doc_id", "speaker"))
+
+# ---------------------------------------------
+# 3. Compute correlations
+# Overall correlation (all chunks)
+# ---------------------------------------------
+cor_TTR_LTR_overall   <- cor(all_metrics$TTR, all_metrics$LTR, method = "pearson")
+cor_MATTR_LTR_overall <- cor(all_metrics$MATTR, all_metrics$LTR, method = "pearson")
+
+cat("\nOverall correlation:\n")
+cat("TTR vs LTR:   ", round(cor_TTR_LTR_overall, 3), "\n")
+cat("MATTR vs LTR: ", round(cor_MATTR_LTR_overall, 3), "\n")
+
+# ---------------------------------------------
+# 4. Correlations per speaker
+# ---------------------------------------------
+speaker_corrs <- all_metrics %>%
+  group_by(speaker) %>%
+  summarise(
+    cor_TTR_LTR   = cor(TTR, LTR, method = "pearson"),
+    cor_MATTR_LTR = cor(MATTR, LTR, method = "pearson")
+  )
+
+cat("\nPer-speaker correlations:\n")
+print(speaker_corrs)
+
+
+```
+
+
+
+# Kogomorov Overall Complexity: 
+
+Kolmogorov complexity is a concept from information theory that measures the “compressibility” of a text—that is, the length of the shortest possible description (or program) that can reproduce it. In practice, highly predictable or repetitive texts are more compressible, while complex or less redundant texts are less compressible. The next code below estimates this idea by comparing the original size of each speech (in bytes) with its compressed size using gzip compression. By doing so, it provides a numeric proxy for informational complexity: smaller compressed sizes indicate more predictable or repetitive language, while larger compressed sizes suggest richer, more varied linguistic structure. The code also organizes the results by speaker and allows sampling for further analysis or visualization.
+```{r}
+
+# Compute original size (in bytes) and compressed size
+balanced_df <- balanced_df %>%
+  mutate(
+    original_size   = nchar(text, type = "bytes"),          # original size in bytes
+    compressed_size = sapply(text, function(txt) {
+      length(memCompress(charToRaw(txt), type = "gzip"))   # compressed size in bytes
+    })
+  )
+
+
+
+
+# Create a new dataframe with speaker, original size, and compressed size
+compression_df <- balanced_df %>%
+  select(unique_id, speaker, original_size, compressed_size)
+
+set.seed(123)
+compression_df %>%
+  group_by(speaker) %>%
+  sample_n(2) %>%   # 2 per speaker (adjust as needed)
+  ungroup()
+
+```
+
+
+```{r}
+ggplot(compression_df, aes(x = speaker, y = compressed_size, fill = speaker)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(
+    title = "Distribution of Compressed Chunk Sizes by Speaker",
+    x = "Speaker",
+    y = "Compressed size (bytes)"
+  ) +
+  theme_minimal() +
+  theme(text = element_text(size = 12))
+
+
+```
+the compression size shows that Reagan chunks has higher compresion sizes, however this can be sensitive to the representation of bytes of the chunks.The next  code extends the compression-based approach to measure linguistic complexity by considering both text length and byte representation. Overall complexity is first calculated as the proportion of the original text size (in bytes) that is compressible, capturing how predictable or redundant the text is. Because longer texts—or texts with more byte-heavy characters—naturally produce larger compressed sizes, a simple compression ratio can be biased. To correct for this, the code fits a linear regression of compressed size on original size (in bytes) and extracts the residuals as adjusted overall complexity. These residuals provide a measure of structural complexity that is independent of text length and byte size, enabling fair comparisons across speeches of different lengths and character encodings. Finally, distributions and summaries are computed to explore variability in complexity across speakers.
+```{r}
+library(dplyr)
+
+compression_df <- compression_df %>%
+  mutate(
+    overall_complexity = (original_size - compressed_size) / original_size
+  )
+
+# Inspect
+head(compression_df)
+library(ggplot2)
+
+
+library(dplyr)
+
+# Fit linear regression: compressed_size ~ original_size
+compression_lm <- lm(compressed_size ~ original_size, data = compression_df)
+
+# Extract residuals as adjusted overall complexity
+compression_df <- compression_df %>%
+  mutate(
+    adjusted_overall_complexity = resid(compression_lm)
+  )
+
+# Inspect
+head(compression_df)
+
+
+ggplot(compression_df, aes(x = speaker, y = overall_complexity, fill = speaker)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 16, alpha = 0.6) +
+  labs(
+    title = "Distribution of Overall Complexity by Speaker",
+    x = "Speaker",
+    y = "Overall Complexity"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+
+library(ggplot2)
+
+ggplot(compression_df, aes(x = speaker, y = adjusted_overall_complexity, fill = speaker)) +
+  geom_boxplot(outlier.colour = "red", outlier.shape = 16, alpha = 0.6) +
+  labs(
+    title = "Adjusted Overall Complexity by Speaker",
+    x = "Speaker",
+    y = "Adjusted Overall Complexity (Residuals)"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(legend.position = "none")
+library(dplyr)
+
+compression_summary <- compression_df %>%
+  group_by(speaker) %>%
+  summarise(
+    # Original overall complexity
+    mean_overall      = mean(overall_complexity, na.rm = TRUE),
+    sd_overall        = sd(overall_complexity, na.rm = TRUE),
+    min_overall       = min(overall_complexity, na.rm = TRUE),
+    max_overall       = max(overall_complexity, na.rm = TRUE),
+    
+    # Adjusted overall complexity
+    mean_adjusted     = mean(adjusted_overall_complexity, na.rm = TRUE),
+    sd_adjusted       = sd(adjusted_overall_complexity, na.rm = TRUE),
+    min_adjusted      = min(adjusted_overall_complexity, na.rm = TRUE),
+    max_adjusted      = max(adjusted_overall_complexity, na.rm = TRUE),
+    
+    n_chunks          = n()
+  )
+
+print(compression_summary)
+
+```
+Calculation t.test() overall adjusted complexity
+```{r}
+# Two-sample Welch's t-test for adjusted Kolmogorov complexity
+t.test(adjusted_overall_complexity ~ speaker, data = compression_df)
+
+
+```
+
+
+
+
+## Kolmogorov Syntatic complexity
+To estimate syntactic complexity, we apply a distortion-and-compression procedure that randomly removes a proportion of tokens from each text and measures the resulting compressed size. This process is repeated multiple times and the average compressed size is recorded.Texts with highly structured, repetitive, and dependent syntactic patterns—such as nested clauses or recurring function-word sequences—are more affected by token removal because their internal redundancy is disrupted, leading to larger compressed sizes. In contrast, texts with looser or less predictable structures are less sensitive to token removal. This approach allows us to quantify syntactic complexity in a way that goes beyond surface length, capturing the degree to which a text’s organization relies on predictable, interdependent structures.
+```{r}
+# Function with iterations
+syntactic_distortion_size_iter <- function(text, remove_prop = 0.10, n_iter = 100) {
+  
+  tokens <- unlist(strsplit(text, "\\s+"))
+  
+  # Safety check
+  if (length(tokens) < 10) return(NA)
+  
+  n_remove <- ceiling(remove_prop * length(tokens))
+  
+  # Run the distortion + compression multiple times
+  compressed_sizes <- numeric(n_iter)
+  
+  for (i in 1:n_iter) {
+    distorted_tokens <- tokens[-sample(seq_along(tokens), n_remove)]
+    distorted_text <- paste(distorted_tokens, collapse = " ")
+    compressed_sizes[i] <- length(memCompress(charToRaw(distorted_text), type = "gzip"))
+  }
+  
+  # Return the mean compressed size over all iterations
+  mean(compressed_sizes)
+}
+
+set.seed(123)
+
+# Apply to all chunks
+balanced_df$syntactic_compressed_size <- vapply(
+  balanced_df$text,
+  syntactic_distortion_size_iter,
+  numeric(1),
+  remove_prop = 0.10,
+  n_iter = 100
+)
+
+# Original compressed size function (unchanged)
+original_compressed_size <- function(text) {
+  length(memCompress(charToRaw(text), type = "gzip"))
+}
+
+balanced_df$original_compressed_size <- vapply(
+  balanced_df$text,
+  original_compressed_size,
+  numeric(1)
+)
+
+# Calculate syntactic complexity
+balanced_df$syntactic_complexity <- 
+  balanced_df$syntactic_compressed_size /
+  balanced_df$original_compressed_size
+
+# Summary by speaker
+library(dplyr)
+
+balanced_df %>%
+  group_by(speaker) %>%
+  summarise(
+    n_chunks = n(),
+    avg_syntactic_complexity = mean(syntactic_complexity, na.rm = TRUE),
+    sd_syntactic_complexity  = sd(syntactic_complexity, na.rm = TRUE),
+    min_syntactic_complexity = min(syntactic_complexity, na.rm = TRUE),
+    max_syntactic_complexity = max(syntactic_complexity, na.rm = TRUE)
+  )
+
+#  plot boxplots
+library(ggplot2)
+
+ggplot(balanced_df, aes(x = speaker, y = syntactic_complexity, fill = speaker)) +
+  geom_boxplot(alpha = 0.7, outlier.size = 0.8) +
+  labs(
+    title = "Syntactic Complexity via Compression-Based Distortion",
+    x = "Speaker",
+    y = "Syntactic Complexity (Distorted / Original)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+
+
+
+
+
+### Calculation t.test() Sytactic Complextiy
+```{r}
+# Extract syntactic complexity values by speaker
+reagan_complexity <- balanced_df$syntactic_complexity[balanced_df$speaker == "Reagan"]
+trump_complexity  <- balanced_df$syntactic_complexity[balanced_df$speaker == "Trump"]
+
+# Run Kolmogorov–Smirnov test
+t_syntactic <- t.test(reagan_complexity, trump_complexity)
+t_syntactic
+
+```
+
+
+
+
+#Morphologhical
+
+To estimate morphological complexity, we apply a distortion-and-compression method at the character level. For each text, a proportion of characters (0.10) is randomly removed, and the resulting text is compressed; this process is repeated multiple times and the average compressed size is recorded. Texts with simpler  morphologically  word forms—lose more structural information when characters are removed, producing larger compressed sizes. In contrast, texts with more complex morphology are less sensitive to random character removal. This approach allows us to quantify the degree of morphological redundancy and structural regularity in a text, complementing syntactic and lexical complexity measures to provide a more holistic picture of linguistic organization in campaign speeches.
+```{r}
+morphological_distortion_size_iter <- function(text, remove_prop = 0.10, n_iter = 100) {
+  
+  chars <- unlist(strsplit(text, ""))
+  
+  # Safety check
+  if (length(chars) < 50) return(NA)
+  
+  n_remove <- ceiling(remove_prop * length(chars))
+  
+  compressed_sizes <- numeric(n_iter)
+  
+  for (i in 1:n_iter) {
+    distorted_chars <- chars[-sample(seq_along(chars), n_remove)]
+    distorted_text <- paste(distorted_chars, collapse = "")
+    compressed_sizes[i] <- length(
+      memCompress(charToRaw(distorted_text), type = "gzip")
+    )
+  }
+  
+  # Mean compressed size across iterations
+  mean(compressed_sizes)
+}
+set.seed(123)
+
+balanced_df$morphological_compressed_size <- vapply(
+  balanced_df$text,
+  morphological_distortion_size_iter,
+  numeric(1),
+  remove_prop = 0.10,
+  n_iter = 100
+)
+
+
+```
+
+```{r}
+balanced_df$morphological_complexity <-
+  - balanced_df$morphological_compressed_size /
+  balanced_df$original_compressed_size
+
+```
+
+
+```{r}
+library(dplyr)
+
+balanced_df %>%
+  group_by(speaker) %>%
+  summarise(
+    n_chunks = n(),
+    avg_morphological_complexity = mean(morphological_complexity, na.rm = TRUE),
+    sd_morphological_complexity  = sd(morphological_complexity, na.rm = TRUE),
+    min_morphological_complexity = min(morphological_complexity, na.rm = TRUE),
+    max_morphological_complexity = max(morphological_complexity, na.rm = TRUE)
+  )
+library(ggplot2)
+
+ggplot(balanced_df, aes(x = speaker, y = morphological_complexity, fill = speaker)) +
+  geom_boxplot(alpha = 0.7, outlier.size = 0.8) +
+  labs(
+    title = "Morphological Complexity via Compression-Based Distortion",
+    x = "Speaker",
+    y = "Morphological Complexity (Distorted / Original)"
+  ) +
+  theme_minimal() +
+  theme(legend.position = "none")
+```
+
+### Calcaulatin t.test() Morphological Complexity
+```{r}
+# Extract morphological  complexity ratios by speaker
+reagan_complexity_m <- balanced_df$morphological_complexity[balanced_df$speaker == "Reagan"]
+trump_complexity_m  <- balanced_df$morphological_complexity[balanced_df$speaker == "Trump"]
+
+# Run Kolmogorov–Smirnov test
+t_morphologhical <- t.test(reagan_complexity_m, trump_complexity_m)
+t_morphologhical
+
+```
+### Correlation MATRIX
+
+Using Pearson correlation it is possible to see the realtionships between the scores first it is necessary to merge all results into a single data frame by chunk id. 
+first TRR and MATTR with complexity measures
+```{r}
+library(dplyr)
+
+# Keep only the relevant columns from lex_div_df_nostop
+lex_div_subset <- lex_div_df_nostop %>%
+  select(doc_id, TTR, MATTR)
+
+# Join TTR & MATTR into balanced_df by matching doc_id → unique_id
+balanced_df <- balanced_df %>%
+  left_join(lex_div_subset, by = c("unique_id" = "doc_id"))
+
+
+# Check
+head(balanced_df)
+
+library(dplyr)
+
+# Merge the complexity scores into balanced_df
+balanced_df <- balanced_df %>%
+  left_join(
+    compression_df %>%
+      select(unique_id, overall_complexity, adjusted_overall_complexity),
+    by = c("unique_id")
+  )
+
+# Check the first rows to confirm
+head(balanced_df)
+
+
+```
+Then LTR scores
+```{r}
+library(dplyr)
+
+# Assuming ltr_chunks_df has columns: doc_id, Lemma_TTR, speaker
+# Merge LTR into balanced_df
+balanced_df <- balanced_df %>%
+  left_join(
+    ltr_chunks_df %>% select(doc_id, Lemma_TTR),
+    by = c("unique_id" = "doc_id")
+  )
+
+# Check the first rows
+head(balanced_df)
+
+```
+
+
+### Applying Pearson Correlation and Visualize it
+
+```{r}
+library(dplyr)
+library(corrplot)
+
+# Select only the relevant numeric columns
+correlation_df <- balanced_df %>%
+  select(Lemma_TTR, TTR, MATTR, adjusted_overall_complexity,
+         syntactic_complexity, morphological_complexity)
+
+# Calculate correlation matrix
+cor_matrix <- cor(correlation_df, use = "pairwise.complete.obs", method = "pearson")
+
+# Print correlation matrix
+print(cor_matrix)
+
+#  visualize it
+corrplot::corrplot(cor_matrix, method = "color", type = "upper",
+                   addCoef.col = "black", tl.cex = 0.9, number.cex = 0.8,
+                   title = "Correlation Matrix: Complexity-Diversity Metrics", mar=c(0,0,1,0))
+
+
+
+```
+
+
+

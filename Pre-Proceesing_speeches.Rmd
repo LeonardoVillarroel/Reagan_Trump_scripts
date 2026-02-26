@@ -1,0 +1,796 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+# Load Required Libraries
+```{r}
+library(rvest)
+library(httr)
+library(dplyr)
+library(stringr)
+library(xml2)
+
+```
+
+
+##EXTRACTING ALL SPEAKER LABELS 
+
+once we have the xml files T#this code extracts potential speaker labels from an XML file containing speech transcripts. It first sets the working directory and loads the XML document, then retrieves all <text> nodes and splits their content into individual lines. Using a regular expression, it identifies lines that begin with a capitalized phrase (up to five words) ending in a colon or period—typical formatting for speaker names in transcripts. After removing missing matches, it applies heuristic filters to exclude common capitalized words that are unlikely to be speaker names (e.g., “Okay,” “Listen,” “QUOTE”). Finally, it removes duplicates, sorts the cleaned labels alphabetically, and prints the resulting list of probable speaker names extracted from the corpus.
+```{r}
+setwd("C:/Users/leo_m/Desktop/Corpus_Analysis/Final_Project/Reagan_Trump")
+
+# Load the XML
+doc <- read_xml("C:/Users/leo_m/Desktop/trump_speeches.xml")
+
+# Extract all <text> nodes
+text_nodes <- xml_find_all(doc, ".//text")
+text_contents <- xml_text(text_nodes)
+
+# Split content into lines
+all_lines <- unlist(str_split(text_contents, "\n"))
+
+# Regex: Match capitalized phrase at the beginning ending in : or .
+regex_match <- str_match(all_lines, "^(([A-Z][a-zA-Z.'\\-]*)( [A-Z][a-zA-Z.'\\-]*){0,4})[:.]")[, 1]
+
+# Clean NAs
+labels_raw <- na.omit(regex_match)
+
+# Remove obvious non-speakers with heuristic filters
+invalid_starters <- c(
+  "Okay", "Does", "Let", "If", "Is", "When", "Possibly", "Good", "Remember", "Now", 
+  "My", "Listen", "Please", "Think", "Another", "And", "So", "Two", "QUOTE", "People", 
+  "Second", "Third", "Fourth", "Fifth", "CLIP", "I said", "Just", "And always"
+)
+
+# Remove entries that start with unwanted phrases
+labels_cleaned <- labels_raw[!sapply(labels_raw, function(lbl) {
+  any(startsWith(lbl, invalid_starters))
+})]
+
+# Get unique and sorted labels
+labels_final <- sort(unique(labels_cleaned))
+
+# Show final speaker labels
+print(labels_final)
+
+```
+###REMOVING ALL LABELS AND NOT TRUMP TEXT
+
+This code cleans and restructures XML transcripts of Trump and Reagan speeches in order to isolate only the target speaker’s utterances. After loading the XML files and extracting all <text> nodes, speaker labels were first identified and classified into “Trump” and “non-Trump” categories. The classification of labels was assisted by Large Language Models (LLMs), which helped systematically distinguish speaker names, institutional roles, crowd annotations, and contextual markers from actual presidential speech. These curated label lists are then used by a custom cleaning function that removes non-target speakers, strips speaker tags, and preserves only Trump’s spoken content.
+
+In a second step, contextual annotations such as “[Music Playing]” or other bracketed stage directions are removed to eliminate non-linguistic material that could bias computational measures. A parallel procedure is applied to the Reagan corpus: potential speaker labels are detected via regex, heuristically filtered, deduplicated, and reviewed. The final result is a cleaned XML corpus containing only the relevant presidential speech text, ready for quantitative linguistic analysis.
+
+```{r}
+# Load required library
+library(rvest)
+library(httr)
+library(dplyr)
+library(stringr)
+# Load XML
+doc <- read_xml("C:/Users/leo_m/Desktop/trump_speeches.xml")
+
+# Get all <text> nodes
+text_nodes <- xml_find_all(doc, ".//text")
+
+# Define Trump and non-Trump speaker labels
+trump_labels <- c(
+  "Trump:",
+  "TRUMP:",
+  "DONALD TRUMP:",
+  "THE PRESIDENT:",
+  "PRESIDENT DONALD TRUMP:",
+  "PRESIDENT TRUMP:",
+  "The President:",
+  "President Donald Trump:",
+  "Donald Trump:"
+)
+
+non_trump_labels <- c(
+  "ADAM LAXALT:",
+  "Administrator Verma.",
+  "Alvino Gonzalez.",
+  "Ambassador Pete Hoekstra.",
+  "ANA NAVARRO:",
+  "ANDY BARR:",
+  "ANNOUNCER:",
+  "ANTONIO BROWN:",
+  "Areizaga.",
+  "Arellano.",
+  "Attorney Cleta Mitchell.",
+  "Attorney Kurt Hilbert. Mr.",
+  "Audience Member.",
+  "Audience Member:",
+  "AUDIENCE MEMBER:",
+  "Audience:",
+  "AUDIENCE:",
+  "Austin Scott.",
+  "Badilla.",
+  "Barack Obama.",
+  "BARLETTA:",
+  "Barron.",
+  "Barry Loudermilk. Barry.",
+  "BARRY LOUDERMILK:",
+  "BARTIROMO:",
+  "BELL:",
+  "Bentley.",
+  "Biden.",
+  "Big Jim Brown.",
+  "Bill Johnson.",
+  "Billy.",
+  "Bishop.",
+  "BLACKBURN:",
+  "Blanca Fox.",
+  "Bob Casey.",
+  "Bob Kroll.",
+  "BOBBY BOWDEN:",
+  "BOBBY KNIGHT:",
+  "Brady Williams.",
+  "Brandon Judd. Border Patrol. ICE.",
+  "BRAUN:",
+  "BRIAN JACK:",
+  "BRIAN PAVLAK:",
+  "BROWN:",
+  "BUDD:",
+  "BURNETT:",
+  "Caminero.",
+  "CAMPOS:",
+  "CAROL MILLER:",
+  "Carolyn Maloney.",
+  "Cassidy.",
+  "Chairwoman Kelli Ward.",
+  "CHARLES W. HERBSTER:",
+  "Chavez.",
+  "CHRIS LACIVITA:",
+  "CHUCK SCHUMER:",
+  "Cindy Hyde-Smith.",
+  "CINDY HYDE-SMITH:",
+  "Congressman Billy Long.",
+  "Congressman Brian Babin.",
+  "Congressman Bryan Steil.",
+  "Congressman Hal Rogers.",
+  "Congressman Pete Olson.",
+  "Congressman Randy Weber.",
+  "Congressman Tom Massie.",
+  "Constanza Mancilla Areizaga.",
+  "CONWAY:",
+  "COPELAND:",
+  "Cory Booker.",
+  "CROWD CHANTING:",
+  "CROWD MEMBER ON STAGE:",
+  "Crowd Member.",
+  "Crowd Member. Alabama.",
+  "Crowd Member. Boo.",
+  "Crowd Member. George Washington.",
+  "Crowd Member. Go Donald.",
+  "Crowd Member. Landslide.",
+  "Crowd Member. Louisiana.",
+  "Crowd Member. Nate Silver.",
+  "Crowd Member. Open Arizona.",
+  "Crowd Member. Patriot.",
+  "Crowd Member. Retire Pelosi.",
+  "Crowd Member. Spygate.",
+  "Crowd Member. Yeah.",
+  "Crowd Member. Yes.",
+  "CROWD MEMBER:",
+  "Crowd.",
+  "Crowd. Hunter.",
+  "Crowd. No.",
+  "Crowd. Yeah.",
+  "Crowd. Yes.",
+  "Crowd. Zero.",
+  "Crowd:",
+  "CROWD:",
+  "CRPWD:",
+  "Cuffe.",
+  "Da Nang Dick.",
+  "Da Nang Richard Blumenthal.",
+  "Dan Bishop.",
+  "DAN BISHOP:",
+  "Dan Meuser. Dan.",
+  "DAN MEUSER:",
+  "DANA WHITE:",
+  "DANIEL CAMPOS:",
+  "Danny O'Connor.",
+  "DAVE MCCORMICK:",
+  "David Kustoff. David.",
+  "DAVID MCCORMICK:",
+  "DAVID MCINTOSH:",
+  "David Mendez. Mr.",
+  "DAVID YOUNG:",
+  "Dr. Kathleen Ruth.",
+  "DR. MEHMEN OZ:",
+  "DR. MEHMET OZ:",
+  "DRILL SERGEANT:",
+  "Ducey.",
+  "EBRO DARDEN:",
+  "Eddie Rispone.",
+  "ELON MUSK:",
+  "Eric Trump.",
+  "ERIN BURNETT:",
+  "FIRST LADY MELANIA TRUMP:",
+  "Former Congressman Fred Keller. Fred.",
+  "Former Kentucky Governor Matt Bevin.",
+  "Fox.",
+  "Fred Keller.",
+  "FRED KELLER:",
+  "GABBARD:",
+  "GASPARINO:",
+  "General Mike Flynn.",
+  "Gloria Badilla.",
+  "Gonzalez.",
+  "Gov. DeSantis.",
+  "Governor Brian Kemp.",
+  "Governor Doug Ducey.",
+  "Governor Doug Ducey. Mr.",
+  "GOVERNOR PHIL BRYANT:",
+  "Governor Ron DeSantis.",
+  "Governor Ron.",
+  "Governor Ronald D.",
+  "Greg Gianforte.",
+  "GREG GIANFORTE:",
+  "Greg Murphy.",
+  "GREG MURPHY:",
+  "Greg Steube.",
+  "Gregg Harper.",
+  "HAGEDORN:",
+  "HALL:",
+  "HARRIS:",
+  "HAWLEY:",
+  "HEARNS:",
+  "Henry McMaster.",
+  "HENRY MCMASTER:",
+  "Herschel Walker.",
+  "HOST SONNY HOSTIN:",
+  "HOUSLEY:",
+  "HYDE-SMITH:",
+  "Ivanka Trump. Hello Georgia.",
+  "IVANKA TRUMP:",
+  "JACK:",
+  "Jackie Walorski. Jackie.",
+  "JAKE TAPPER:",
+  "Jane Timken.",
+  "Jared Bentley. Yeah.",
+  "JASON LEWIS:",
+  "JEANINE PIRRO:",
+  "Jesus Marquez.",
+  "Jim Bognet.",
+  "JIM GAFFIGAN:",
+  "JIM HAGEDORN:",
+  "JIM JORDAN:",
+  "JIM JUSTICE:",
+  "JIM MARCHANT:",
+  "JIM RENACCI:",
+  "Jim.",
+  "Jimmy Chavez. Mr.",
+  "JIMMY FALLON:",
+  "Jody Hice. Jody.",
+  "JOE LOMBARDO:",
+  "JOHN GIBBS:",
+  "John Harwood.",
+  "John Joyce.",
+  "JOHN JOYCE:",
+  "John Schroeder.",
+  "Johnson.",
+  "Jorge Rivas. Mr.",
+  "JOSH HAWLEY:",
+  "JOSH MCKOON:",
+  "KAMALA HARRIS:",
+  "KARI LAKE:",
+  "KARIN HOUSLEY:",
+  "Keith Ellison.",
+  "Keller.",
+  "Keller. Mr.",
+  "Kelly Ward.",
+  "KELLY:",
+  "Kellyanne Conway.",
+  "KELLYANNE CONWAY:",
+  "KENNETH COPELAND:",
+  "Kentucky Attorney General Daniel Cameron.",
+  "KEVIN CRAMER:",
+  "Kevin Hall.",
+  "KID ROCK:",
+  "Kim Reynolds.",
+  "KIM REYNOLDS:",
+  "Kirby.",
+  "KNIGHT:",
+  "KOBACH:",
+  "KRISTINA KARAMO:",
+  "Larry Cuffe.",
+  "Larry Obhof.",
+  "LAURA INGRAHAM:",
+  "Laura Nowlan. Yes. Mr.",
+  "LE'VEON BELL:",
+  "Leah Marquez Peterson.",
+  "Leah Vukmir.",
+  "LEAH VUKMIR:",
+  "LEE GREENWOOD:",
+  "Lieutenant Governor Tate Reeves.",
+  "Lindsey Graham.",
+  "LINDSEY GRAHAM:",
+  "Lindsey.",
+  "Llamas.",
+  "Lloyd's Pharmacy Owner James Stage.",
+  "LOU BARLETTA:",
+  "Lou. Lou.",
+  "Louie.",
+  "Lynch. Mr.",
+  "MACCHIO:",
+  "Marjorie Taylor Greene.",
+  "MARJORIE TAYLOR GREENE:",
+  "MARK HARRIS:",
+  "MARK ROBINSON:",
+  "Marquez Peterson.",
+  "Marquez.",
+  "MARSHA BLACKBURN:",
+  "Martha Llamas.",
+  "MASTRIANO:",
+  "MATT DEPERNO:",
+  "MATT DEPERONO:",
+  "Matt Rosendale.",
+  "MATT ROSENDALE:",
+  "Maxine Waters.",
+  "Maxine.",
+  "MCCORMICK:",
+  "MCKOON:",
+  "McMaster.",
+  "Meadows.",
+  "Meadows. Mr.",
+  "Meadows. Yeah.",
+  "MEGHAN MCCAIN:",
+  "Mendez.",
+  "Michael McDonald. Yes.",
+  "MICHAEL WHATLEY:",
+  "MICHELS:",
+  "MIKE BRAUN:",
+  "MIKE DEWINE:",
+  "Mike Kelly.",
+  "MIKE KELLY:",
+  "MIKE WALLACE:",
+  "Mike.",
+  "Minnesota House Speaker Kurt Daudt.",
+  "MISSISSIPPI GOVERNOR PHIL BRYANT:",
+  "MITCH MCCONNELL:",
+  "Mitchell.",
+  "Mitchell. Mr.",
+  "Monica Yellin.",
+  "Montana Attorney General Tim Fox.",
+  "Moreno.",
+  "MORRISEY:",
+  "Moses Sanchez.",
+  "MOTHER OF KAYLA HAMILTON:",
+  "MR LAXALT:",
+  "Mr. Balla.",
+  "Mr. Balla. Right.",
+  "Mr. Balla. Yes.",
+  "Mr. Bishop.",
+  "Mr. Bishop. Mm-hmm.",
+  "Mr. Bishop. Mm-hmm. Mm-hmm.",
+  "Mr. Merga. Yes.",
+  "Mr. Stage.",
+  "Mr. Stage. Yes.",
+  "Mr. Stauber.",
+  "Mr. Thomas.",
+  "Mr. Wall. Mr.",
+  "Mr. Wolf.",
+  "Mr. Wolf. Yes.",
+  "Mrs. Wolf.",
+  "Ms. Moore.",
+  "Ms. Wolf.",
+  "Ms. Wolf. Criminals.",
+  "Ms. Wolf. Yes.",
+  "MUSK:",
+  "NARRATOR:",
+  "Nigel Farage:",
+  "OCASIO-CORTEZ:",
+  "Ohio Senate President Larry Obhof.",
+  "Patrick Lynch.",
+  "PATRICK MORRISSEY:",
+  "Paul Gosar.",
+  "Paul.",
+  "PAVLAK:",
+  "PENCE:",
+  "Pennsylvania State Senator Guy Reschenthaler.",
+  "Phil Bryant. Mr.",
+  "Phil Robertson.",
+  "Pinal County Sheriff.",
+  "Raffensperger.",
+  "Raffensperger. Mr.",
+  "Ralph Abraham.",
+  "RAND PAUL:",
+  "Reeves.",
+  "Reporter Pearson Sharp.",
+  "REPORTER:",
+  "Representative Alexandria Ocasio-Cortez.",
+  "REPRESENTATIVE ALEXANDRIA OCASIO-CORTEZ:",
+  "REPRESENTATIVE BOST:",
+  "REPRESENTATIVE CHABOT:",
+  "Representative David Rouzer.",
+  "REPRESENTATIVE DAVIS:",
+  "REPRESENTATIVE HULTGREN:",
+  "Representative Jeff Van Drew.",
+  "REPRESENTATIVE RENACCI:",
+  "REVEREND JEREMIAH WRIGHT:",
+  "Reynaldo Robledo.",
+  "Reynolds.",
+  "Rick Allen. Rick. Rick.",
+  "RICK SCOTT:",
+  "Rispone.",
+  "Rivas.",
+  "Robledo.",
+  "Robledo. Yeah.",
+  "ROGAN:",
+  "RON DESANTIS:",
+  "Ron Johnson.",
+  "RONNA MCDANIEL:",
+  "ROSENDALE:",
+  "Rudy Giuliani.",
+  "Sanchez.",
+  "Sanchez. Mr.",
+  "SARAH HUCKABEE SANDERS:",
+  "Sarah Huckabee Ssnders:",
+  "SCOTT WALKER:",
+  "Scott.",
+  "SCOTT:",
+  "Seaman.",
+  "SEAN HANNITY:",
+  "SENATOR BERNIE SANDERS:",
+  "Senator Bill Cassidy.",
+  "Senator Bill Cassidy. Mr.",
+  "SENATOR CHUCK SCHUMER:",
+  "SENATOR CINDY HYDE-SMITH:",
+  "Senator Cory Gardner.",
+  "Senator David Perdue.",
+  "SENATOR DEAN HELLER:",
+  "Senator John Hoeven.",
+  "Senator John Kennedy.",
+  "SENATOR JON OSSOFF:",
+  "Senator Kelly Loeffler.",
+  "Senator Lindsey Graham.",
+  "Senator Martha McSally.",
+  "Senator Mitch McConnell.",
+  "SENATOR RALPH WARNOCK:",
+  "Senator Rand Paul.",
+  "Senator Ron Johnson.",
+  "Senator Tim Scott.",
+  "SENATORE ELIZABETH WARREN:",
+  "Sergio Arellano.",
+  "Sharp.",
+  "Shope.",
+  "Shope. Exactly. Exactly.",
+  "SHOUT FROM CROWD:",
+  "SIGAL CHATTAH:",
+  "STACEY ABRAMS:",
+  "STACY GARRITY:",
+  "State Auditor Rosendale:",
+  "State Representative.",
+  "T.J. Shope.",
+  "Tate Reeves.",
+  "TED BUDD:",
+  "Thom Tillis.",
+  "Tillis.",
+  "Tillis. No.",
+  "Tillis. Yeah.",
+  "TIM MICHELS:",
+  "TIM SCOTT:",
+  "Todd.",
+  "TOM HOMAN:",
+  "TRAINEE:",
+  "TRAINEES IN FORMATION:",
+  "TRICK TRICK:",
+  "TROY BALDERSON:",
+  "TUDOR DIXON:",
+  "TULSI GABBARD:",
+  "Turning Point U.S.A.",
+  "UFC President Dana White.",
+  "UNION MEMBER:",
+  "UNNAMED ANNOUNCER:",
+  "UNNAMED INTERVIEWER:",
+  "UNNAMED INTERVIEWERS:",
+  "UNNAMED TRUMP STAFFER:",
+  "Van Drew.",
+  "VANCE:",
+  "VICE PRESIDENT KAMALA HARRIS:",
+  "VICE PRESIDENT MIKE PENCE:",
+  "VICE PRESIDENT PENCE:",
+  "Victoria Seaman.",
+  "VIVEK RAMASWAMY:",
+  "VOICEOVER:",
+  "VUKMIR:",
+  "WARNOCK:",
+  "WARREN:",
+  "WATKINS:",
+  "Willie Robertson."
+)
+
+# ------ Function to clean text node -------
+clean_text_node <- function(text_content, trump_labels, non_trump_labels) {
+  # Split text into lines
+  lines <- unlist(str_split(text_content, "\n"))
+  
+  # Initialize variables
+  cleaned_lines <- character()
+  last_was_trump <- FALSE
+  
+  for (line in lines) {
+    # Remove leading/trailing whitespace
+    line <- str_trim(line)
+    
+    # Skip empty lines
+    if (nchar(line) == 0) next
+    
+    # Extract label if present at the beginning of the line
+    match <- str_match(line, "^([^:]+:|[A-Za-z][A-Za-z\\s\\.]+\\.)\\s*(.*)$")
+    
+    if (!is.na(match[1, 1])) {
+      label <- match[1, 2]
+      content <- match[1, 3]
+      
+      # Check if the label is a Trump label
+      if (label %in% trump_labels) {
+        last_was_trump <- TRUE
+        # Keep the content, remove the label
+        if (nchar(content) > 0) {
+          cleaned_lines <- c(cleaned_lines, str_trim(content))
+        }
+      } else if (label %in% non_trump_labels) {
+        last_was_trump <- FALSE
+        # Skip this line (non-Trump label and its content)
+        next
+      } else {
+        # Unknown label: treat as non-Trump, skip this line
+        last_was_trump <- FALSE
+        next
+      }
+    } else {
+      # No label: include line if it follows a Trump label or is neutral
+      if (last_was_trump || !grepl("^\\[.*\\]$", line)) {
+        # Include line unless it’s an annotation like [Music: ...]
+        cleaned_lines <- c(cleaned_lines, line)
+      }
+    }
+  }
+  
+  # Join lines back into single string
+  cleaned_text <- paste(cleaned_lines, collapse = "\n")
+  return(cleaned_text)
+}
+
+# Apply cleaning to all <text> nodes
+for (node in text_nodes) {
+  original_text <- xml_text(node)
+  cleaned_text <- clean_text_node(original_text, trump_labels, non_trump_labels)
+  xml_set_text(node, cleaned_text)
+}
+
+# Save cleaned XML
+write_xml(doc, "C:/Users/leo_m/Desktop/cleaned_trump_speeches.xml")
+```
+
+### Remove Context Details [Music Playing]
+```{r}
+# Load required library
+library(xml2)
+library(stringr)
+
+# Load the previously cleaned XML
+doc <- read_xml("C:/Users/leo_m/Desktop/cleaned_trump_speeches.xml")
+
+# Get all <text> nodes
+text_nodes <- xml_find_all(doc, ".//text")
+
+# Function to remove clarifications (text in square brackets)
+remove_clarifications <- function(text_content) {
+  # Remove all text within square brackets
+  cleaned_text <- gsub("\\[[^]]*\\]", "", text_content)
+  # Trim any extra whitespace and normalize newlines
+  cleaned_text <- str_trim(cleaned_text)
+  return(cleaned_text)
+}
+
+# Apply clarification removal to all <text> nodes
+for (node in text_nodes) {
+  original_text <- xml_text(node)
+  if (nchar(original_text) > 0) {
+    cleaned_text <- remove_clarifications(original_text)
+    xml_set_text(node, cleaned_text)
+  }
+}
+
+# Save the modified XML
+write_xml(doc, "C:/Users/leo_m/Desktop/cleaned_trump_speeches.xml")
+```
+
+### CLEANING RONALd REAGAN SPEECHES
+The Reagan code differs from the Trump version primarily in the structure and precision of the regular expression used to identify speaker labels. Whereas the Trump script searches more broadly for capitalized phrases of up to five words ending in a colon or period, the Reagan script employs a more constrained and explicit pattern. It limits labels to one to three capitalized words and explicitly accounts for common transcript markers such as “Q:” and “A:”, which are typical of structured press conference formats. Additionally, the Reagan version extracts a specific capturing group from the regex match, ensuring that only the label portion (including punctuation) is retained. Overall, the Reagan code is more conservative and tailored to standardized transcript formatting, reducing false positives while relying on the more Iregular structure of Reagan-era speech transcripts.
+
+```{r}
+# Load required libraries
+library(xml2)
+library(stringr)
+
+# Load the XML file
+doc <- read_xml("C:/Users/leo_m/Desktop/reagan_speeches.xml")
+
+# Extract all <text> nodes
+text_nodes <- xml_find_all(doc, ".//text")
+text_contents <- xml_text(text_nodes)
+
+# Split the content into lines
+all_lines <- unlist(str_split(text_contents, "\n"))
+
+# REGEX MATCH: Match label including final colon or period
+regex_match <- str_match(
+  all_lines,
+  "^(((?:[QqAa]:)|(?:[A-Z][a-zA-Z.'\\-]* ?){1,3}[.:]))\\s?.*"
+)[, 2]  # <-- group 2 is full label + punctuation
+
+# Clean NAs
+labels_raw <- na.omit(regex_match)
+
+# OPTIONAL Filter out heuristically unwanted phrases that appear like labels
+invalid_starters <- c(
+  "Okay", "Does", "Let", "If", "Is", "When", "Possibly", "Good", "Remember", "Now", 
+  "My", "Listen", "Please", "Think", "Another", "And", "So", "Two", "QUOTE", "People", 
+  "Second", "Third", "Fourth", "Fifth", "CLIP", "I said", "Just", "And always"
+)
+
+# Remove labels starting with invalid starting phrases
+labels_cleaned <- labels_raw[!sapply(labels_raw, function(lbl) {
+  any(startsWith(lbl, invalid_starters))
+})]
+
+# Get unique and sorted label list
+labels_final <- sort(unique(labels_cleaned))
+
+# Print result
+print(labels_final)
+
+# Show the cleaned list
+print(labels_final)
+```
+
+
+This code cleans the Reagan XML corpus by systematically removing all speech that does not belong to President Reagan and retaining only his spoken content. First, two sets of speaker labels are defined: one containing non-Reagan speakers (e.g., audience members, guests, moderators, and “Q:”), and another containing Reagan’s own labels (e.g., “The President.”, “A:”). The script then reads the XML file, extracts all <speech> nodes, and processes each speech individually using a custom cleaning function.
+
+Within that function, each speech is split into lines and evaluated sequentially. If a line begins with a non-Reagan label, the script temporarily stops keeping text until it encounters “The President.” again, effectively excluding questions, audience reactions, and third-party interventions. While retaining Reagan’s speech, it also removes inline audience references and strips remaining speaker labels to produce clean, continuous text. Finally, the cleaned text replaces the original content inside the XML structure, and the modified file is saved as a new XML document. The result is a corpus version containing only Reagan’s spoken words, free from interactional or contextual transcript material.
+
+```{r}
+
+
+# Define the labels
+no_reagan_labels <- c(
+  "Audience member\\.",
+  "Audience members\\.",
+  "Audience\\.",
+  "Dais guest\\.",
+  "Lyn Nofziger\\.",
+  "Mr\\. Fahrenkopf\\.",
+  "Mrs\\. Reagan\\.",
+  "Ms\\. Mochary\\.",
+  "The Vice President\\.",
+  "Q:"
+)
+reagan_labels <- c("The President\\.", "A:", "The President:")
+
+# Read the XML file
+doc <- read_xml("C:/Users/leo_m/Desktop/reagan_speeches.xml")
+
+# Find all speech nodes
+speeches <- xml_find_all(doc, "//speech")
+
+# Function to clean text by removing non-Reagan speaker text and labels
+clean_speech_text <- function(speech_text) {
+  # Split text into lines
+  lines <- strsplit(speech_text, "\n")[[1]]
+  cleaned_lines <- c()
+  keep_line <- TRUE  # Flag to determine if line should be kept
+  
+  for (line in lines) {
+    # Check if line starts with a non-Reagan label
+    non_reagan_match <- any(sapply(no_reagan_labels, function(label) {
+      grepl(paste0("^", label, "\\s"), line)
+    }))
+    
+    # If line starts with non-Reagan label, skip until next The President.
+    if (non_reagan_match) {
+      keep_line <- FALSE
+      next
+    }
+    
+    # If line starts with The President., resume keeping lines
+    if (grepl("^The President\\.", line)) {
+      keep_line <- TRUE
+    }
+    
+    # Keep line if flag is TRUE
+    if (keep_line) {
+      # Remove Audience labels within the line
+      for (label in c("Audience member\\.", "Audience members\\.", "Audience\\.")) {
+        line <- gsub(paste0(label, "\\s*[^.]*"), "", line)
+      }
+      cleaned_lines <- c(cleaned_lines, line)
+    }
+  }
+  
+  # Join lines back and remove Reagan labels
+  cleaned_text <- paste(cleaned_lines, collapse = "\n")
+  for (label in reagan_labels) {
+    cleaned_text <- gsub(paste0(label, "\\s*"), "", cleaned_text)
+  }
+  
+  # Clean up extra newlines and trim
+  cleaned_text <- gsub("\n+", "\n", cleaned_text)
+  cleaned_text <- trimws(cleaned_text)
+  
+  return(cleaned_text)
+}
+
+# Process each speech
+for (speech in speeches) {
+  # Get the text node
+  text_node <- xml_find_first(speech, "./text")
+  if (!is.null(text_node)) {
+    # Get the current text content
+    speech_text <- xml_text(text_node)
+    
+    # Clean the text
+    cleaned_text <- clean_speech_text(speech_text)
+    
+    # Update the text node with cleaned text
+    xml_text(text_node) <- cleaned_text
+  }
+}
+
+# Save the modified XML to a new file
+write_xml(doc, "C:/Users/leo_m/Desktop/reagan_speeches_cleaned.xml")
+cat("Processing complete. Cleaned XML saved to reagan_speeches_cleaned.xml\n")
+```
+
+This code performs a final cleaning step on the already filtered Reagan corpus by removing non-linguistic contextual annotations enclosed in square brackets (e.g., “[applause]”, “[laughter]”). After loading the previously cleaned XML file and extracting all <speech> nodes, the script defines a function that uses a regular expression to delete any text appearing within square brackets, including the brackets themselves. It then normalizes spacing by collapsing multiple spaces and trimming leading or trailing whitespace, while preserving the overall structure of the speech text. Each speech node is processed individually, the cleaned text replaces the original content in the XML, and the updated file is saved. This step ensures that paralinguistic or editorial annotations do not interfere with subsequent linguistic or readability analyses.
+```{r}
+
+library(xml2)
+
+# Read the cleaned XML file
+doc <- read_xml("C:/Users/leo_m/Desktop/reagan_speeches_cleaned.xml")
+
+# Find all speech nodes
+speeches <- xml_find_all(doc, "//speech")
+
+# Function to remove only bracketed context details (e.g., [applause], [laughter])
+remove_bracketed_context <- function(speech_text) {
+  # Remove text within square brackets, including the brackets
+  cleaned_text <- gsub("\\[.*?\\]", "", speech_text)
+  
+  # Preserve original formatting, only removing extra spaces around removed brackets
+  cleaned_text <- gsub("\\s{2,}", " ", cleaned_text)
+  cleaned_text <- trimws(cleaned_text)
+  
+  return(cleaned_text)
+}
+
+# Process each speech
+for (speech in speeches) {
+  # Get the text node
+  text_node <- xml_find_first(speech, "./text")
+  if (!is.null(text_node)) {
+    # Get the current text content
+    speech_text <- xml_text(text_node)
+    
+    # Remove bracketed context details
+    cleaned_text <- remove_bracketed_context(speech_text)
+    
+    # Update the text node with cleaned text
+    xml_text(text_node) <- cleaned_text
+  }
+}
+
+# Save the modified XML to a new file
+write_xml(doc, "C:/Users/leo_m/Desktop/reagan_speeches_cleaned.xml")
+
+cat("Bracketed context details removed. Updated XML saved to reagan_speeches_final.xml\n")
+```
+
+### REGEX to MATCH  Footnotes
+The regular expression ^\\d\\s. is used to identify numbered footnotes that appear at the beginning of a line. The caret ^ anchors the match to the start of the line, \\d matches a single digit, \\s matches a whitespace character (typically a space), and . matches any following character. Together, this pattern detects lines that begin with a number followed by a space—common formatting for footnotes in texts extracted from PDFs or OCR sources. In a text editor with regex search enabled, this expression can be used to quickly locate such footnotes so they can be manually reviewed, deleted, or corrected. This is particularly useful when footnotes introduce formatting noise or spelling errors that may interfere with readability calculations or linguistic analysis.

@@ -1,0 +1,768 @@
+
+# METHOD
+
+To compare the rhetorical strategies of Ronald Reagan and Donald Trump Readability was evaluated through two established indices: the Dale–Chall (DC) and the Flesch–Kincaid (FK) scores, each emphasizing different aspects of textual complexity. Together, these metrics allow us to examine not only how varied the presidents’ vocabularies were but also how accessible or demanding their speeches appeared to general audiences.
+
+## Import the libraries
+
+To Perfom the Natural Language processing we need to  import the necessary libraries
+```{r setup, echo=TRUE, message=FALSE, warning=FALSE, results='hide'}
+#install.packages(c("xml2", "tidyverse", "quanteda"))
+#tinytex::install_tinytex()
+library(xml2)
+library(rmarkdown)
+library(textstem)
+library(spacyr)
+library(stringr)
+library(readr)
+library(quanteda)
+library(readtext)
+library(quanteda.textstats)
+library(tokenizers)
+library(tidytext)
+library(tibble)
+library(dplyr)
+library(ggplot2)
+
+```
+
+We set the working directory to the folder containing our XML files: cleaned_reagan_speeches.xml and cleaned_trump_speeches.xml
+```{r}
+setwd("C:/Users/leo_m/Desktop/Corpus_Analysis/Final_Project/Reagan_Trump")
+```
+
+## XML to Data Frame
+
+We transformed the XML files into a data frame, converting the XML nodes into table columns using the xml2 library.
+```{r}
+parse_speeches <- function(file_path, speaker) {
+  # Read XML file
+  xml_data <- read_xml(file_path)
+  
+  # Extract all speech nodes
+  speeches <- xml_find_all(xml_data, "//speech")
+  
+  # Extract each node as a vector
+  titles <- xml_text(xml_find_all(speeches, "title"))
+  dates <- xml_text(xml_find_all(speeches, "date"))
+  links <- xml_text(xml_find_all(speeches, "link"))
+  texts <- xml_text(xml_find_all(speeches, "text"))
+  
+  # Create a data frame
+  df <- tibble(
+    speaker = speaker,
+    title = titles,
+    date = dates,
+    link = links,
+    text = texts
+  )
+  
+  return(df)
+}
+```
+
+### Create a Data Frame of the speeches
+We create a data frame for each president and the we combine both in one data frame speeches_df
+```{r}
+# Parse Reagan speeches
+reagan_df <- parse_speeches("cleaned_reagan_speeches.xml", "Reagan")
+
+# Parse Trump speeches
+trump_df <- parse_speeches("cleaned_trump_speeches.xml", "Trump")
+
+# Combine into one data frame
+speeches_df <- bind_rows(reagan_df, trump_df)
+
+#Preview of the data frame
+head(speeches_df)
+dim(speeches_df)
+
+# Count the number of speeches for each speaker
+speech_counts <- speeches_df %>%
+  group_by(speaker) %>%
+  summarise(count = n())
+print(speech_counts)
+```
+
+### Balancing same number of speeches for each President
+
+After scraping, there were more Donald Trump speeches available in the American Presidency Project. To ensure a balanced dataset for comparison, we randomly selected 139 speeches for Donald Trump using sample_n(), matching the number of speeches available for Ronald Reagan. We also check for any duplicates 
+```{r}
+# Set a seed for reproducibility
+set.seed(123)  # Ensures consistent random sampling
+
+# Filter Reagan speeches (keep all) and sample 139 Trump speeches
+balanced_speeches_df <- speeches_df %>%
+  filter(speaker == "Reagan") %>%
+  bind_rows(
+    speeches_df %>%
+      filter(speaker == "Trump") %>%
+      sample_n(size = 139)
+  )
+# Check the number of speeches per speaker
+balanced_counts <- balanced_speeches_df %>%
+  group_by(speaker) %>%
+  summarise(count = n())
+print(balanced_counts)
+
+# Inspect the data frame (Show 5 random rows)
+
+print(balanced_speeches_df[sample(nrow(balanced_speeches_df), 5), ])
+
+
+# Check for duplicate titles
+duplicate_titles <- balanced_speeches_df %>%
+  group_by(title) %>%
+  summarise(count = n()) %>%
+  filter(count > 1)
+print(duplicate_titles)
+```
+
+Even when the titles appear similar, the dates differ, indicating that the events were the same but the speeches were delivered in different contexts.
+
+
+### Saving XML file for selected 139 speeches of Donald Trump
+```{r}
+# Create root node
+root <- xml_new_root("speeches")
+
+# Loop over speeches
+for (i in seq_len(nrow(balanced_speeches_df))) {
+
+  speech_node <- xml_add_child(root, "speech")
+
+  xml_add_child(speech_node, "speaker",
+                balanced_speeches_df$speaker[i])
+
+  xml_add_child(speech_node, "title",
+                balanced_speeches_df$title[i])
+
+  xml_add_child(speech_node, "date",
+                balanced_speeches_df$date[i])
+
+  xml_add_child(speech_node, "text",
+                balanced_speeches_df$text[i])
+  
+  
+
+}
+write_xml(root, "trump_139_selected_speeches.xml")  
+
+```
+
+
+
+Even when the titles appear similar, the dates differ, indicating that the events were the same but the speeches were delivered in different contexts.
+
+
+
+### Creating a Quanteda Corpus
+
+We first added a unique ID to each speech using mutate() and sprintf("%03d", row_number()), creating IDs like 001, 002, etc. Then, we built a quanteda corpus with corpus(), specifying the text column (text_field = "text") and the document ID (docid_field = "unique_id"). This allows efficient text analysis. Finally, we checked the corpus structure with print(), summary(), and head(docnames()) to confirm the documents were correctly labeled.
+
+```{r}
+
+balanced_speeches_df <- balanced_speeches_df %>%
+  mutate(unique_id = sprintf("%03d", row_number()))
+# Create a quanteda corpus
+speeches_corpus <- corpus(balanced_speeches_df, 
+                          text_field = "text",
+                          docid_field = "unique_id")
+
+```
+
+```{r}
+# Step 3: Check the corpus structure
+print(speeches_corpus)
+speeches_corpus_df <- summary(speeches_corpus)
+head(docnames(speeches_corpus))
+```
+
+
+Then We generated a summary of the corpus using summary(speeches_corpus, n = 5), which shows the first five documents. Then, we tokenized the corpus with quanteda::tokens(), splitting the text into individual words for analysis.
+
+We extracted the document names with docnames() and the speakers from the document variables using docvars(), storing them in speakers_vec and naming them according to their document IDs. This links each speech to its speaker.
+
+
+
+```{r}
+# Summary of the corpus
+summary(speeches_corpus, n = 5)  # Shows first 5 documents
+
+speeches_tokens <- quanteda:: tokens(speeches_corpus)
+
+docnames_vec <- docnames(speeches_tokens)
+speakers_vec <- docvars(speeches_tokens, "speaker")
+names(speakers_vec) <- docnames_vec
+
+
+
+```
+
+
+
+### Overall Token/sentences counts
+
+
+```{r}
+
+
+
+# Tokenize the corpus (word tokens)
+speeches_tokens <- quanteda::tokens(
+  speeches_corpus,
+  remove_punct = TRUE
+)
+
+
+total_tokens <- sum(ntoken(speeches_tokens))
+print(total_tokens)
+
+# Sentence tokenization 
+speeches_sentences <- quanteda::tokens(
+  speeches_corpus,
+  what = "sentence"  ### tokenize by sentences units!!!!
+)
+
+total_sentences <- sum(ntoken(speeches_sentences))
+print(total_sentences)
+
+# Tokens and Sentences per document
+token_counts <- ntoken(speeches_tokens)
+sentence_counts <- ntoken(speeches_sentences)
+
+# Document-level metadata
+doc_info <- docvars(speeches_corpus)
+
+# Combine counts with metadata
+count_data <- data.frame(
+  speaker   = doc_info$speaker,
+  tokens    = token_counts,
+  sentences = sentence_counts
+)
+
+# Aggregate totals by speaker
+aggregate_stats <- count_data %>%
+  group_by(speaker) %>%
+  summarise(
+    total_tokens     = sum(tokens),
+    avg_tokens       = mean(tokens),
+    sd_tokens        = sd(tokens),
+    total_sentences  = sum(sentences),
+    avg_sentences    = mean(sentences),
+    sd_sentences     = sd(sentences),
+    n_speeches       = n()
+  )
+
+print(aggregate_stats)
+
+
+
+```
+
+
+
+
+
+
+
+
+
+
+### Creating a Balanced Chunked Corpus of 30 sentences
+
+When readability is calculated using token-based chunks instead of full sentences, the original sentence structures are disrupted. This can distort measures of , average sentence length, and other readability indicators, because the coherent units of meaning—sentences—are broken into arbitrary segments. By using equal samples of full sentences (e.g., 30 per sample), we preserve the natural syntactic and rhetorical structures, ensuring that readability scores accurately reflect the complexity and organization of the text.
+
+```{r}
+
+
+set.seed(123)
+
+# =====================================================
+# 1️⃣ Tokenizar todos los discursos por oraciones
+# =====================================================
+sentences_tokens <- tokens(speeches_corpus, what = "sentence")
+all_sentences <- unlist(sentences_tokens)
+
+# Crear data frame de oraciones con metadata
+sentences_df <- data.frame(
+  sentence_id  = seq_along(all_sentences),
+  text         = all_sentences,
+  original_doc = rep(docnames(speeches_corpus), ntoken(sentences_tokens)),
+  stringsAsFactors = FALSE
+)
+
+# Añadir speaker
+sentences_df <- sentences_df %>%
+  left_join(
+    data.frame(original_doc = docnames(speeches_corpus), 
+               speaker = docvars(speeches_corpus, "speaker")),
+    by = "original_doc"
+  )
+
+# =====================================================
+# 2️⃣ Crear chunks de 30 oraciones
+# =====================================================
+CHUNK_SIZE <- 30
+
+sentences_df <- sentences_df %>%
+  group_by(original_doc) %>%
+  mutate(chunk_id = paste0(original_doc, "-", ceiling(row_number() / CHUNK_SIZE))) %>%
+  ungroup()
+
+# Combinar las oraciones de cada chunk
+chunked_df <- sentences_df %>%
+  group_by(chunk_id, speaker) %>%
+  summarise(
+    text       = paste(text, collapse = " "),
+    nsentences = n(),
+    .groups = "drop"
+  )
+
+# =====================================================
+# 3️⃣ Eliminar chunks con menos de 30 oraciones
+# =====================================================
+chunked_df_clean <- chunked_df %>%
+  filter(nsentences >= CHUNK_SIZE)
+
+# =====================================================
+# 4️⃣ Calcular tokens por chunk
+# =====================================================
+chunked_toks <- tokens(chunked_df_clean$text,
+                       remove_punct   = TRUE,
+                       remove_numbers = TRUE,
+                       remove_symbols = TRUE)
+
+chunked_df_clean$ntokens <- ntoken(chunked_toks)
+
+# =====================================================
+# 5️⃣ Balancear speakers (Trump → Reagan)
+# =====================================================
+# Número de chunks de Reagan
+n_reagan <- chunked_df_clean %>% filter(speaker == "Reagan") %>% nrow()
+
+# Separar por speaker
+chunks_list <- chunked_df_clean %>% group_split(speaker)
+names(chunks_list) <- sapply(chunks_list, function(df) unique(df$speaker))
+
+# Tomar todos los de Reagan y samplear Trump
+balanced_chunks <- bind_rows(
+  chunks_list[["Reagan"]],
+  slice_sample(chunks_list[["Trump"]], n = n_reagan, replace = FALSE)
+)
+
+# =====================================================
+# 6️⃣ Crear data frame final del corpus
+# =====================================================
+corpus_df <- balanced_chunks %>%
+  select(
+    chunk_id,
+    speaker,
+    text,
+    ntokens,
+    nsentences
+  )
+
+# =====================================================
+# 7️⃣ Verificación rápida
+# =====================================================
+# Número de chunks por speaker
+corpus_df %>% count(speaker, name = "n_chunks")
+
+# Resumen de tokens y oraciones
+summary(corpus_df$ntokens)
+summary(corpus_df$nsentences)
+
+
+```
+### Comparison Sentence vs Token lenghts
+```{r}
+
+
+summary_by_speaker <- corpus_df %>%
+  group_by(speaker) %>%
+  summarise(
+    n_chunks       = n(),
+    total_tokens   = sum(ntokens),
+    total_sentences= sum(nsentences),
+    .groups = "drop"
+  )
+
+print(summary_by_speaker)
+
+
+```
+
+### Distribution Sentences-Tokens by Speaker
+```{r}
+
+
+summary_by_speaker <- corpus_df %>%
+  group_by(speaker) %>%
+  summarise(
+    n_chunks       = n(),
+    total_tokens   = sum(ntokens),
+    total_sentences= sum(nsentences),
+    .groups = "drop"
+  )
+
+print(summary_by_speaker)
+
+
+```
+
+## Calculating Readability Metrics: 
+
+This code computes several readability metrics—including Flesch, Flesch-Kincaid, Dale-Chall, SMOG, and Gunning Fog—for each text chunk in the corpus. By aggregating these metrics at the speaker level, we can compare the average readability, variation, and extremes of speech across different speakers. Maintaining sentence-based chunks ensures that readability scores reflect true syntactic and lexical complexity rather than artifacts of chunking.
+```{r}
+
+
+
+
+# ===============================
+# 1 Compute readability metrics (using FOG for Gunning Fog)
+# ===============================
+readability_metrics <- textstat_readability(
+  corpus_df$text,
+  measure = c("Flesch", "Flesch.Kincaid", "Dale.Chall", "SMOG", "FOG")
+)
+
+# Combine with corpus_df
+corpus_df <- bind_cols(corpus_df, readability_metrics)
+
+# Optional: rename columns for simplicity
+corpus_df <- corpus_df %>%
+  rename(
+    Flesch        = Flesch,
+    FleschKincaid = `Flesch.Kincaid`,
+    DaleChall     = `Dale.Chall`,
+    GunningFog    = FOG
+  )
+
+# ===============================
+# 2 Quick check
+# ===============================
+head(corpus_df %>% 
+       select(chunk_id, speaker, ntokens, nsentences, 
+              Flesch, FleschKincaid, DaleChall, SMOG, GunningFog))
+
+# ===============================
+# 3 Summary statistics by speaker (including Gunning Fog)
+# ===============================
+readability_stats <- corpus_df %>%
+  group_by(speaker) %>%
+  summarise(
+    mean_Flesch      = mean(Flesch, na.rm = TRUE),
+    sd_Flesch        = sd(Flesch, na.rm = TRUE),
+    min_Flesch       = min(Flesch, na.rm = TRUE),
+    max_Flesch       = max(Flesch, na.rm = TRUE),
+    
+    mean_FK          = mean(FleschKincaid, na.rm = TRUE),
+    sd_FK            = sd(FleschKincaid, na.rm = TRUE),
+    min_FK           = min(FleschKincaid, na.rm = TRUE),
+    max_FK           = max(FleschKincaid, na.rm = TRUE),
+    
+    mean_DC          = mean(DaleChall, na.rm = TRUE),
+    sd_DC            = sd(DaleChall, na.rm = TRUE),
+    min_DC           = min(DaleChall, na.rm = TRUE),
+    max_DC           = max(DaleChall, na.rm = TRUE),
+    
+    mean_SMOG        = mean(SMOG, na.rm = TRUE),
+    sd_SMOG          = sd(SMOG, na.rm = TRUE),
+    min_SMOG         = min(SMOG, na.rm = TRUE),
+    max_SMOG         = max(SMOG, na.rm = TRUE),
+    
+    mean_GunningFog  = mean(GunningFog, na.rm = TRUE),
+    sd_GunningFog    = sd(GunningFog, na.rm = TRUE),
+    min_GunningFog   = min(GunningFog, na.rm = TRUE),
+    max_GunningFog   = max(GunningFog, na.rm = TRUE),
+    
+    n_chunks         = n()
+  )
+
+readability_stats
+
+
+```
+
+### Calculating t.test() Readability Scores
+```{r}
+
+metrics <- c("Flesch", "FleschKincaid", "DaleChall", "SMOG", "GunningFog")
+
+# Create a list to store results
+t_test_results <- lapply(metrics, function(metric) {
+  t.test(corpus_df[[metric]] ~ corpus_df$speaker)
+})
+
+# Name the list by metric
+names(t_test_results) <- metrics
+
+# Print all results
+t_test_results
+
+# Or view in a cleaner format
+for(metric in metrics){
+  cat("\n---", metric, "---\n")
+  print(t_test_results[[metric]])
+}
+
+
+```
+
+## Calculating Correlation Between Readability Scores
+```{r}
+library(dplyr)
+library(corrplot)
+
+# ===============================
+# 1️⃣ Select readability metrics
+# ===============================
+correlation_df <- corpus_df %>%
+  select(
+    Flesch,
+    FleschKincaid,
+    SMOG,
+    GunningFog,
+    DaleChall
+  )
+
+# ===============================
+# 2️⃣ Correlation matrix (Pearson)
+# ===============================
+cor_matrix <- cor(
+  correlation_df,
+  use = "pairwise.complete.obs",
+  method = "pearson"
+)
+
+# Print correlation matrix
+print(cor_matrix)
+
+# ===============================
+# 3️⃣ Visualization
+# ===============================
+corrplot(
+  cor_matrix,
+  method = "color",
+  type = "upper",
+  addCoef.col = "black",
+  tl.cex = 0.9,
+  number.cex = 0.8,
+  title = "Correlation Matrix: Readability Metrics",
+  mar = c(0, 0, 1, 0)
+)
+
+
+```
+### Visualization Readability Scores 
+```{r}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+
+# -----------------------------
+# 1. Prepare data for plotting
+# -----------------------------
+plot_df <- corpus_df %>%
+  select(speaker, Flesch, FleschKincaid) %>%  # just select existing columns
+  pivot_longer(
+    cols = c(Flesch, FleschKincaid),
+    names_to = "metric",
+    values_to = "value"
+  )
+
+# -----------------------------
+# 2. Plot boxplots
+# -----------------------------
+ggplot(plot_df, aes(x = speaker, y = value, fill = speaker)) +
+  geom_boxplot(alpha = 0.7, outlier.color = "black", outlier.shape = 16) +
+  facet_wrap(~ metric, ncol = 2, scales = "free_y") +
+  labs(
+    title = "Distribution of Readability Scores by Speaker",
+    x = "Speaker",
+    y = "Score"
+  ) +
+  theme_minimal(base_size = 14) +
+  theme(
+    legend.position = "none",
+    axis.text.x = element_text(angle = 30, hjust = 1)
+  )
+```
+
+```{r}
+ggplot(corpus_df, aes(x = speaker, y = SMOG, fill = speaker)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(
+    title = "Distribution of SMOG Scores by Speaker",
+    x = "Speaker",
+    y = "SMOG Score"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),
+    legend.position = "none"
+  )
+```
+```{r}
+ggplot(corpus_df, aes(x = speaker, y = GunningFog, fill = speaker)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(
+    title = "Distribution of Gunning Fog Indexes by Speaker",
+    x = "Speaker",
+    y = "Gunning Fog"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),
+    legend.position = "none"
+  )
+
+```
+
+```{r}
+library(ggplot2)
+
+ggplot(corpus_df, aes(x = speaker, y = DaleChall, fill = speaker)) +
+  geom_boxplot(alpha = 0.7) +
+  labs(
+    title = "Distribution of Dale–Chall Readability Scores by Speaker",
+    x = "Speaker",
+    y = "Dale–Chall score"
+  ) +
+  theme_minimal() +
+  theme(
+    text = element_text(size = 12),
+    legend.position = "none"
+  )
+
+
+
+```
+
+### Selecting less/most Readable Chunks
+```{r}
+library(dplyr)
+
+# Define the chunks of interest
+selected_chunks <- c("262-1", "072-1", "147-3", "011-1")
+
+# Filter corpus_df for these chunks and select relevant columns
+chunks_table <- corpus_df %>%
+  filter(chunk_id %in% selected_chunks) %>%
+  select(
+    chunk_id, speaker, ntokens, nsentences, 
+    Flesch, FleschKincaid, DaleChall, SMOG, GunningFog, text
+  )
+
+# View the table
+print(chunks_table)
+
+# Optionally, for a nicer table in RMarkdown or exporting to Word/Excel:
+# library(knitr)
+# kable(chunks_table, caption = "Readability Metrics for Selected Chunks")
+
+
+```
+
+
+
+
+### Visualizing word that are not in the Dalle-Chall word list 1995
+word list obtained from: 
+ReadabilityFormulas.com. (n.d.). The Dale-Chall 3,000 word list for readability formulas. ReadabilityFormulas.com. Retrieved February 26, 2026, from https://readabilityformulas.com/word-lists/the-dale-chall-word-list-for-readability-formulas/
+```{r}
+
+library(wordcloud)
+
+# --- Prepare Dale-Chall list ---
+dale_lines <- readLines("dale_chall_words.txt", encoding = "UTF-8")
+dale_words <- tolower(unlist(strsplit(dale_lines, "\\s+")))
+dale_words <- dale_words[dale_words != ""]
+
+# --- Tokenize corpus without lemmatization ---
+corpus_tokens <- balanced_chunks %>%
+  select(speaker, text) %>%
+  unnest_tokens(token, text) %>%
+  # Remove punctuation, numbers, symbols, and common stopwords
+  filter(
+    !token %in% stop_words$word,
+    !grepl("^[[:punct:][:digit:]]+$", token), 
+    !is.na(token),
+    token != "'s"
+  ) %>%
+  mutate(token = tolower(token)) %>%
+  mutate(non_dale = !(token %in% dale_words))
+
+# --- Top non-Dale-Chall words per speaker ---
+non_dale_tokens <- corpus_tokens %>%
+  filter(non_dale) %>%
+  count(speaker, token, sort = TRUE)
+
+# --- Separate by speaker ---
+non_dale_reagan <- non_dale_tokens %>% filter(speaker == "Reagan")
+non_dale_trump <- non_dale_tokens %>% filter(speaker == "Trump")
+```
+
+
+```{r}
+
+library(wordcloud)
+
+# --- Wordcloud function with custom colors ---
+plot_wordcloud_colors <- function(df, colors) {
+  set.seed(123)
+  wordcloud(
+    words = df$token,
+    freq  = df$n,
+    max.words = 150,
+    scale = c(2, 0.3),                  # smaller words to fit more
+    colors = sample(colors, length(df$token), replace = TRUE),
+    random.order = FALSE
+  )
+}
+
+# --- Define color palettes ---
+reagan_colors <- c("#FF6666", "#FF0000", "#CC0000", "#990000", "#660000")
+trump_colors  <- c("#66CCCC", "#00CCCC", "#00AAAA", "#009999", "#006666")
+
+# --- Side-by-side plotting ---
+par(mfrow = c(1,2), mar = c(0,0,0,0))  # 1 row, 2 columns, no margins
+
+# Reagan wordcloud
+plot_wordcloud_colors(non_dale_reagan, reagan_colors)
+
+# Trump wordcloud
+plot_wordcloud_colors(non_dale_trump, trump_colors)
+
+# Reset plotting layout
+par(mfrow = c(1,1))
+
+
+
+```
+
+
+
+### Comparison: Word Familiarity vs Word Complexity
+```{r}
+
+# DaleChall vs SMOG 
+
+# Scatter plot: Dale-Chall vs Gunning Fog
+ggplot(corpus_df, aes(x = DaleChall, y = SMOG, color = speaker)) +
+  geom_point(alpha = 0.6, size = 2) +            # points for each chunk
+  geom_smooth(method = "lm", se = FALSE, linetype = "dashed") + # optional trend line
+  labs(
+    title = "Comparison: Word Familiarity vs Word Complexity",
+    x = "Dale-Chall Score",
+    y = "Smog Score",
+    color = "Speaker"
+  ) +
+  theme_minimal(base_size = 14)
+
+```
+
+
+
+

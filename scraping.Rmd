@@ -1,0 +1,211 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+
+### install the Required Libraries
+```{r}
+install.packages("rvest")
+install.packages("httr")
+install.packages("dplyr")
+install.packages("stringr")
+install.packages("xml2")  
+
+```
+
+### Load the required libraris 
+```{r}
+library(rvest)
+library(httr)
+library(dplyr)
+library(stringr)
+```
+
+### Extracting Individual Speech Links from Search Result Pages
+
+This segment of code specifically focuses on parsing the UCSB search result pages to identify and collect the links that point to individual speeches. By reading each page’s HTML, selecting all <a> elements, filtering for those that start with /documents/, and removing duplicates, it isolates the relevant speech URLs. The final step converts these relative paths into full URLs that can be directly used to access Reagan’s speeches for further processing or analysis.
+```{r}
+reagan_urls <- c(
+  "https://www.presidency.ucsb.edu/advanced-search?field-keywords=&field-keywords2=&field-keywords3=&from%5Bdate%5D=&to%5Bdate%5D=&person2=200296&category2%5B0%5D=&items_per_page=100&f%5B0%5D=field_docs_attributes%3A205",
+  "https://www.presidency.ucsb.edu/advanced-search?field-keywords=&field-keywords2=&field-keywords3=&from%5Bdate%5D=&to%5Bdate%5D=&person2=200296&category2%5B0%5D=&items_per_page=100&f%5B0%5D=field_docs_attributes%3A205&page=1"
+)
+
+all_links <- c()
+
+for (url in reagan_urls) {
+  page <- read_html(url)
+  links <- page %>% html_nodes("a") %>% html_attr("href")
+  links <- links[!is.na(links)]
+  speech_links <- links[str_starts(links, "/documents/")]
+  all_links <- c(all_links, speech_links)
+}
+
+# Remove duplicates and create full URLs
+all_links <- unique(all_links)
+reagan_full_links <- paste0("https://www.presidency.ucsb.edu", all_links)
+
+# Preview
+head(reagan_full_links, 139)
+
+length(reagan_full_links)  # should be around 139
+
+
+```
+
+
+
+
+
+
+
+
+
+
+### Cleaning and Filtering Speech URLs
+
+This code segment refines the list of Reagan speech URLs by removing any entries that are NA or do not point to actual speeches. It further filters out unwanted links containing specific patterns, such as "archive-guidebook" or "category-attributes", which typically refer to site navigation or metadata pages rather than speech content. The result is a clean, accurate set of URLs that can be reliably used to download or analyze the full text of Reagan’s speeches.
+
+
+
+```{r}
+# Remove NA and non-speech URLs
+reagan_full_links <- reagan_full_links[!is.na(reagan_full_links)]
+
+# Remove specific unwanted links
+exclude_patterns <- c(
+  "archive-guidebook",
+  "category-attributes"
+)
+
+# Filter out URLs that contain any of the unwanted patterns
+reagan_full_links <- reagan_full_links[!str_detect(reagan_full_links, paste(exclude_patterns, collapse = "|"))]
+
+# Preview cleaned links
+head(reagan_full_links, 10)
+length(reagan_full_links)
+
+```
+
+## Scraping Reagan Speeches and Saving as XML
+
+This code scrapes the full text of Reagan’s speeches from the cleaned list of URLs and organizes them into a structured XML file. For each URL, it retrieves the speech title, date, and paragraph content, concatenates the paragraphs into a single text block, and creates a <speech> node containing <title>, <date>, <link>, and <text> subnodes. All <speech> nodes are added under a root <speeches> node. A short delay (Sys.sleep(7)) is included between requests to respect server crawl limits. Finally, the complete XML document is saved as reagan_speeches.xml, providing a ready-to-use structured dataset for further text analysis.
+```{r}
+
+library(rvest)
+library(xml2)
+library(stringr)
+
+# Initialize root XML node
+doc <- xml_new_root("speeches")
+
+for (i in seq_along(reagan_full_links)) {
+  url <- reagan_full_links[i]
+  
+  page <- tryCatch(read_html(url), error = function(e) NULL)
+  if (is.null(page)) next
+  
+  title <- page %>% html_node("h1") %>% html_text(trim = TRUE)
+  date <- page %>% html_node("span.date-display-single") %>% html_text(trim = TRUE)
+  text_paragraphs <- page %>% html_nodes("div.field-docs-content p") %>% html_text(trim = TRUE)
+  text <- paste(text_paragraphs, collapse = "\n")
+  
+  # Create <speech> node and append to root <speeches>
+  speech_node <- xml_add_child(doc, "speech")
+  xml_add_child(speech_node, "title", title)
+  xml_add_child(speech_node, "date", date)
+  xml_add_child(speech_node, "link", url)       # 👈 Add link node
+  xml_add_child(speech_node, "text", text)
+  
+  cat(sprintf("Added speech %03d: %s\n", i, title))
+  
+  Sys.sleep(7)  # ⏳ Respect crawl delay
+}
+
+# Save the full XML document to a file
+write_xml(doc, "reagan_speeches.xml")
+cat("All speeches saved in reagan_speeches.xml\n")
+
+```
+
+
+```{r}
+# Initialize root node
+
+write_xml(doc, "C:/Users/leo_m/Desktop/reagan_speeches.xml")
+```
+
+### DOING THE SAME WITH PRESIDENT DONALD TRUMP'speeches
+```{r}
+
+
+# URLs for Trump speeches (first and second term)
+trump_urls <- c(
+  # First Term (3 pages)
+  "https://www.presidency.ucsb.edu/advanced-search?field-keywords=&field-keywords2=&field-keywords3=&from%5Bdate%5D=&to%5Bdate%5D=&person2=200301&category2%5B0%5D=&items_per_page=100&f%5B0%5D=field_docs_attributes%3A205",
+  "https://www.presidency.ucsb.edu/advanced-search?field-keywords=&field-keywords2=&field-keywords3=&from%5Bdate%5D=&to%5Bdate%5D=&person2=200301&category2%5B0%5D=&items_per_page=100&f%5B0%5D=field_docs_attributes%3A205&page=1",
+  "https://www.presidency.ucsb.edu/advanced-search?field-keywords=&field-keywords2=&field-keywords3=&from%5Bdate%5D=&to%5Bdate%5D=&person2=200301&category2%5B0%5D=&items_per_page=100&f%5B0%5D=field_docs_attributes%3A205&page=2",
+  
+  # Second Term (1 page)
+  "https://www.presidency.ucsb.edu/advanced-search?field-keywords=&field-keywords2=&field-keywords3=&from%5Bdate%5D=&to%5Bdate%5D=&person2=375125&category2%5B0%5D=&items_per_page=100&f%5B0%5D=field_docs_attributes%3A205"
+)
+
+# STEP 1: Get all speech links
+all_trump_links <- c()
+
+for (url in trump_urls) {
+  page <- read_html(url)
+  links <- page %>% html_nodes("a") %>% html_attr("href")
+  links <- links[!is.na(links)]  # Remove NA
+  speech_links <- links[str_starts(links, "/documents/")]
+  all_trump_links <- c(all_trump_links, speech_links)
+}
+
+# Remove duplicates
+all_trump_links <- unique(all_trump_links)
+
+# Create full URLs
+trump_full_links <- paste0("https://www.presidency.ucsb.edu", all_trump_links)
+
+# Filter out known non-speech URLs
+exclude_patterns <- c("archive-guidebook", "category-attributes")
+trump_full_links <- trump_full_links[!str_detect(trump_full_links, paste(exclude_patterns, collapse = "|"))]
+
+# STEP 2: Create XML document
+doc <- xml_new_root("speeches")
+
+for (i in seq_along(trump_full_links)) {
+  url <- trump_full_links[i]
+  
+  page <- tryCatch(read_html(url), error = function(e) NULL)
+  if (is.null(page)) next
+  
+  title <- page %>% html_node("h1") %>% html_text(trim = TRUE)
+  date <- page %>% html_node("span.date-display-single") %>% html_text(trim = TRUE)
+  text_paragraphs <- page %>% html_nodes("div.field-docs-content p") %>% html_text(trim = TRUE)
+  text <- paste(text_paragraphs, collapse = "\n")
+  
+  # Add XML nodes
+  speech_node <- xml_add_child(doc, "speech")
+  xml_add_child(speech_node, "title", title)
+  xml_add_child(speech_node, "date", date)
+  xml_add_child(speech_node, "link", url)
+  xml_add_child(speech_node, "text", text)
+  
+  cat(sprintf("✅ Added speech %03d: %s\n", i, title))
+  Sys.sleep(5)  # Delay to respect the server
+}
+
+# STEP 3: Save to file
+write_xml(doc, "C:/Users/leo_m/Desktop/trump_speeches.xml")
+cat("🎉 All Trump speeches saved in 'trump_speeches.xml'\n")
+
+
+
+```
+
+Add a new chunk by clicking the *Insert Chunk* button on the toolbar or by pressing *Ctrl+Alt+I*.
+
+When you save the notebook, an HTML file containing the code and output will be saved alongside it (click the *Preview* button or press *Ctrl+Shift+K* to preview the HTML file).
+
+The preview shows you a rendered HTML copy of the contents of the editor. Consequently, unlike *Knit*, *Preview* does not run any R code chunks. Instead, the output of the chunk when it was last run in the editor is displayed.
