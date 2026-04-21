@@ -1,8 +1,6 @@
 ---
-title: "Lexical Diversity and Kolmogorv Complexity"
+title: "R Notebook"
 output:
-  html_document:
-    df_print: paged
   pdf_document: default
   html_notebook: default
 ---
@@ -33,7 +31,6 @@ library(tidytext)
 library(tibble)
 library(dplyr)
 library(ggplot2)
-library(tidyr)
 
 ```
 
